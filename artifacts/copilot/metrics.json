@@ -1,0 +1,14 @@
+{
+  "n_accounts": 19980,
+  "n_train": 13986,
+  "n_test": 5994,
+  "illicit_rate": 0.09,
+  "roc_auc": 0.9049,
+  "pr_auc": 0.8051,
+  "precision_at_threshold": 0.843,
+  "recall_at_threshold": 0.7259,
+  "precision_at_top_1pct": 1.0,
+  "decision_threshold": 0.5,
+  "source": "HI-Small_Trans.csv",
+  "n_transactions": 120558
+}
