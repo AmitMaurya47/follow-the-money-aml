@@ -56,3 +56,16 @@ def test_neighbourhood_lists_chain_neighbours(tmp_path):
     assert info["outbound"][0]["txId"] == int(ids[6])
     missing = neighbourhood(bundle, -1)
     assert missing["inbound"] == [] and missing["outbound"] == []
+
+
+def test_demo_transactions_are_test_period_and_mixed(tmp_path):
+    from aml_copilot.crypto.elliptic import demo_transactions
+    data, out = tmp_path / "data", tmp_path / "out"
+    data.mkdir()
+    _write_fixture(data)
+    build_crypto_artifacts(data_dir=data, out_dir=out)
+    bundle = load_crypto_bundle(data_dir=data, out_dir=out)
+    picks = demo_transactions(bundle, n_illicit=2, n_licit=2)
+    assert len(picks) == 4 and len(set(picks)) == 4
+    assert set(bundle.scores.loc[picks, "split"]) == {"test"}
+    assert set(bundle.scores.loc[picks, "label"]) == {"illicit", "licit"}

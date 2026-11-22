@@ -1,4 +1,4 @@
-"""AML Investigation Copilot — live Streamlit UI.
+"""AML Investigation Lab — live Streamlit UI.
 
 Run from the repo root after building artifacts:
     PYTHONPATH=src .venv/bin/streamlit run copilot_ui.py
@@ -24,6 +24,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from aml_copilot.auth import check_login
 from aml_copilot.copilot import landing, load_bundle
 from aml_copilot.copilot.agents import (
     DONE_KEY,
@@ -46,7 +47,7 @@ from aml_copilot.copilot.viz import (
 import plotly.graph_objects as go
 
 ROOT = Path(__file__).resolve().parent
-st.set_page_config(page_title="AML Investigation Copilot", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="Follow the Money", page_icon="🔎", layout="wide")
 
 CSS = """
 <style>
@@ -117,13 +118,18 @@ ranked_accounts = scores.sort_values(ascending=False).index.tolist()
 PAGE_NAMES = [
     "🌐 Welcome", "👤 My accounts", "🛰️ System live", "🏠 Command center", "🕸️ Network",
     "⚡ Live workflow", "⏯ Playback", "🧪 Real-time test", "📚 Knowledge base",
-    "₿ Crypto (Elliptic)",
+    "₿ Crypto (Elliptic)", "💬 Ask the assistant",
 ]
 
 
 def go_to(target: str) -> None:
     """Button callback: switch the sidebar page before the radio is drawn."""
     st.session_state["nav"] = target
+
+
+def sign_out() -> None:
+    st.session_state["signed_in"] = False
+    st.session_state.pop("user", None)
 
 
 def demo_accounts(labels: pd.Series) -> list[str]:
@@ -144,31 +150,53 @@ def status_for(result: dict) -> dict[str, str]:
 
 
 with st.sidebar:
-    st.markdown("### 🕵️ AML Copilot")
+    st.markdown("### 🔎 Follow the Money")
     page = st.radio("Navigate", PAGE_NAMES, key="nav", label_visibility="collapsed")
     st.divider()
     st.caption(f"Accounts: **{len(scores):,}**  ·  Transactions: **{bundle.metrics['n_transactions']:,}**")
-    st.caption(f"Claude drafting: **{'available' if API_KEY_PRESENT else 'off (no key)'}**")
+    st.caption(f"AI drafting: **{'available' if API_KEY_PRESENT else 'off (no key)'}**")
 
 if page.startswith("🌐"):
-    m = bundle.metrics
     st.markdown(
         landing.welcome_hero(
-            "AML Investigation Copilot",
-            "Follow the money. Explain the decision.",
-            "A graph and machine-learning tool that finds accounts behaving like money-laundering "
-            "networks. AI agents gather the evidence and write a case note, and a human analyst decides.",
+            "Bank accounts · Bitcoin · one investigation lab",
+            "Follow the Money",
+            "Money that is laundered leaves a trail of many small moves. This lab reads that trail in bank "
+            "transfers and in Bitcoin, scores it, and explains each decision to a human analyst.",
         ),
         unsafe_allow_html=True,
     )
-    st.markdown("#### How it works")
-    st.markdown(landing.flow_html(), unsafe_allow_html=True)
 
-    c = st.columns(4)
-    c[0].metric("Accounts scored", f"{m['n_accounts']:,}")
-    c[1].metric("Transactions", f"{m['n_transactions']:,}")
-    c[2].metric("ROC-AUC", m["roc_auc"], help="Stratified 30% account holdout")
-    c[3].metric("Escalate at score", DECISION_THRESHOLD)
+    if not st.session_state.get("signed_in"):
+        st.markdown("#### Sign in")
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input("Password", type="password", key="login_pass")
+            submitted = st.form_submit_button("Sign in", type="primary")
+        if submitted:
+            if check_login(username, password):
+                st.session_state["signed_in"] = True
+                st.session_state["user"] = username.strip()
+                st.rerun()
+            else:
+                st.error("Wrong username or password.")
+        st.caption(f"Dummy authentication for this prototype. Demo login: **demo** / **{'demo123'}**. "
+                   "Nothing is stored, and this is not real security.")
+    else:
+        st.success(f"Signed in as {st.session_state.get('user')}.")
+        st.button("Sign out", on_click=sign_out)
+
+    st.markdown("#### The story")
+    st.markdown(landing.flow_html(landing.BRIDGE_STEPS), unsafe_allow_html=True)
+    st.caption("The bank and Bitcoin datasets are separate and not linked to each other. The story is that the "
+               "same kind of pattern shows up in both, so one lab can study both.")
+
+    st.markdown("#### What you can check, and how")
+    for what, how in landing.HOW_TO:
+        st.markdown(f"- **{what}**: {how}")
+
+    st.markdown("#### How the bank side works")
+    st.markdown(landing.flow_html(), unsafe_allow_html=True)
 
     a, b = st.columns(2)
     with a:
@@ -183,22 +211,18 @@ if page.startswith("🌐"):
         st.markdown("#### What it does not do")
         st.markdown(
             "- It does not decide that a crime happened. It ranks cases for human review.\n"
-            "- It is trained on synthetic data and is a learning project, not a compliance system.\n"
-            "- The writer uses Claude only when a key is set; otherwise a fixed template is used."
+            "- It is trained on synthetic bank data and real Bitcoin data, and is a learning project, not a compliance system.\n"
+            "- The writer uses the AI model only when a key is set; otherwise a fixed template is used."
         )
 
     st.markdown("#### Start here")
-    s1, s2 = st.columns(2)
+    s1, s2, s3 = st.columns(3)
     with s1:
-        st.markdown("<div class='signin'><b>👤 Check my accounts</b><br>"
-                    "<span class='disclaimer'>Demo sign-in, one click, no password.</span></div>",
-                    unsafe_allow_html=True)
-        st.button("Sign in and check my accounts", type="primary", on_click=go_to, args=("👤 My accounts",))
+        st.button("👤 My bank accounts", on_click=go_to, args=("👤 My accounts",))
     with s2:
-        st.markdown("<div class='signin'><b>🛰️ Watch the system run</b><br>"
-                    "<span class='disclaimer'>The usual process, live, stage by stage.</span></div>",
-                    unsafe_allow_html=True)
-        st.button("Start the live run", on_click=go_to, args=("🛰️ System live",))
+        st.button("👛 My Bitcoin transactions", on_click=go_to, args=("₿ Crypto (Elliptic)",))
+    with s3:
+        st.button("🛰️ Watch the system run", on_click=go_to, args=("🛰️ System live",))
 
 elif page.startswith("👤"):
     st.markdown(
@@ -210,16 +234,10 @@ elif page.startswith("👤"):
         unsafe_allow_html=True,
     )
     if not st.session_state.get("signed_in"):
-        st.markdown(
-            "<div class='signin'><b>Sign in</b><br><span class='disclaimer'>This is a demo: one click, "
-            "no password, no real identity check. The accounts shown are sample accounts from the dataset."
-            "</span></div>",
-            unsafe_allow_html=True,
-        )
-        st.button("Sign in as demo customer", type="primary",
-                  on_click=lambda: st.session_state.update(signed_in=True))
+        st.info("Sign in on the welcome page to see your accounts.")
+        st.button("Go to sign-in", on_click=go_to, args=("🌐 Welcome",))
     else:
-        st.success("Signed in as demo customer. Accounts linked to this profile:")
+        st.success(f"Signed in as {st.session_state.get('user')}. Accounts linked to this profile:")
         rows = []
         for acc in demo_accounts(labels):
             s = scores[acc]
@@ -257,7 +275,7 @@ elif page.startswith("🛰"):
     )
     c1, c2, c3 = st.columns([2, 1, 1])
     n_run = c1.slider("Accounts to process", 20, 200, 60, step=10)
-    use_llm = c2.toggle("Claude writer", value=False, disabled=not API_KEY_PRESENT, key="sys_llm")
+    use_llm = c2.toggle("AI writer", value=False, disabled=not API_KEY_PRESENT, key="sys_llm")
     start = c3.button("▶ Run the process", type="primary")
 
     left, right = st.columns([1, 2])
@@ -356,8 +374,9 @@ def get_crypto():
 
 if page.startswith("₿"):
     from aml_copilot.crypto import artifacts_ready, build_crypto_artifacts, neighbourhood
+    from aml_copilot.crypto.elliptic import demo_transactions
 
-    hero("Crypto view: Bitcoin transactions",
+    hero("Bitcoin: follow the transactions",
          "Real data. The Elliptic dataset labels Bitcoin transactions as illicit (scams, ransomware, "
          "Ponzi schemes) or licit. Every transaction is scored, and you can inspect its neighbours.",
          ["Elliptic dataset", "per-transaction scoring", "temporal split", "real labels"])
@@ -370,57 +389,183 @@ if page.startswith("₿"):
     else:
         cb = get_crypto()
         cm = cb.metrics
-        k = st.columns(5)
-        k[0].metric("Transactions", f"{cm['n_transactions']:,}")
-        k[1].metric("Labelled", f"{cm['n_labelled']:,}")
-        k[2].metric("Illicit share (labelled)", f"{cm['illicit_rate_labelled']:.1%}")
-        k[3].metric("ROC-AUC (test)", cm["roc_auc"], help=f"Test = time steps {cm['split_step'] + 1}–49")
-        k[4].metric("Illicit F1 (test)", cm["f1_at_threshold"])
+        tab_over, tab_mine, tab_explore = st.tabs(["📖 Overview", "👛 My transactions", "🔎 Explorer"])
 
-        left, right = st.columns([3, 2])
-        with left:
-            st.subheader("How well do scores separate illicit transactions? (test period)")
-            test = cb.scores[cb.scores["split"] == "test"]
-            st.plotly_chart(score_distribution_figure(cb.risk[test.index], cb.labels01[test.index]),
-                            key="crypto-dist")
-        with right:
-            st.subheader("Reading this page")
+        with tab_over:
+            st.markdown("#### The story in Bitcoin")
+            st.markdown(landing.flow_html(landing.CRYPTO_FLOW_STEPS), unsafe_allow_html=True)
             st.markdown(
-                "- Each **node** is one Bitcoin transaction. Colour is its risk score.\n"
-                "- The model trains only on early time steps and is tested on later ones, "
-                "so it cannot see the future.\n"
-                "- **Unknown** transactions are scored but have no label, so they are never used to measure accuracy."
+                "Bitcoin records every payment on a public ledger, but not who owns the wallets. Analysts "
+                "look at the shape of payments: a transaction that receives from and pays to known-bad "
+                "activity is risky. The labels come from real investigations."
+            )
+            k = st.columns(5)
+            k[0].metric("Transactions", f"{cm['n_transactions']:,}")
+            k[1].metric("Labelled", f"{cm['n_labelled']:,}")
+            k[2].metric("Illicit share (labelled)", f"{cm['illicit_rate_labelled']:.1%}")
+            k[3].metric("ROC-AUC (test)", cm["roc_auc"], help=f"Test = time steps {cm['split_step'] + 1}–49")
+            k[4].metric("Illicit F1 (test)", cm["f1_at_threshold"])
+            left, right = st.columns([3, 2])
+            with left:
+                st.subheader("How well do scores separate illicit transactions? (test period)")
+                test = cb.scores[cb.scores["split"] == "test"]
+                st.plotly_chart(score_distribution_figure(cb.risk[test.index], cb.labels01[test.index]),
+                                key="crypto-dist")
+            with right:
+                st.subheader("Reading this page")
+                st.markdown(
+                    "- Each **node** is one Bitcoin transaction. Colour is its risk score.\n"
+                    "- The model trains only on early time steps and is tested on later ones, "
+                    "so it cannot see the future.\n"
+                    "- **Unknown** transactions are scored but have no label, so they are never used to measure accuracy."
+                )
+
+        with tab_mine:
+            if not st.session_state.get("signed_in"):
+                st.info("Sign in on the welcome page to see your transactions.")
+                st.button("Go to sign-in", on_click=go_to, args=("🌐 Welcome",), key="crypto-to-login")
+            else:
+                st.success(f"Signed in as {st.session_state.get('user')}. Transactions linked to this profile:")
+                rows = []
+                for t in demo_transactions(cb):
+                    s = float(cb.risk[t])
+                    state_txt = ("🚩 Flagged for review" if s >= DECISION_THRESHOLD
+                                 else "👀 Being watched" if s >= LOW_RISK_CUTOFF else "✅ Normal")
+                    rows.append({"txId": t, "risk score": round(s, 3), "status": state_txt,
+                                 "time step": int(cb.scores.loc[t, "time_step"]),
+                                 "known illicit (demo only)": "yes" if cb.scores.loc[t, "label"] == "illicit" else "no"})
+                st.dataframe(pd.DataFrame(rows), hide_index=True)
+                st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
+                chosen = st.selectbox("Open a transaction", [r["txId"] for r in rows], key="mine-tx")
+                info = neighbourhood(cb, chosen)
+                m = st.columns(4)
+                m[0].metric("Risk", f"{cb.risk[chosen]:.3f}")
+                m[1].metric("Time step", int(cb.scores.loc[chosen, "time_step"]))
+                m[2].metric("Inbound links", info["in_degree"])
+                m[3].metric("Outbound links", info["out_degree"])
+                st.plotly_chart(ego_network_figure(cb.graph, cb.risk.rename(str), cb.labels01.rename(str),
+                                                   str(chosen), hops=1, max_nodes=40), key="mine-ego")
+                t1, t2 = st.columns(2)
+                t1.markdown("**Received from (inbound)**")
+                t1.dataframe(pd.DataFrame(info["inbound"]), hide_index=True)
+                t2.markdown("**Sent to (outbound)**")
+                t2.dataframe(pd.DataFrame(info["outbound"]), hide_index=True)
+
+        with tab_explore:
+            ranked = cb.risk.sort_values(ascending=False)
+            ranked = ranked[cb.scores.loc[ranked.index, "label"] != "unknown"].head(2000).index.tolist()
+            c1, c2 = st.columns([3, 1])
+            tx = c1.selectbox(
+                "Transaction (labelled, highest risk first)", ranked,
+                format_func=lambda t: f"{t}  ·  risk {cb.risk[t]:.3f}  ·  {cb.scores.loc[t, 'label']}",
+                key="explore-tx",
+            )
+            hops = c2.slider("Hops", 1, 3, 2, key="crypto-hops")
+            st.plotly_chart(ego_network_figure(cb.graph, cb.risk.rename(str), cb.labels01.rename(str),
+                                               str(tx), hops=hops, max_nodes=80), key="crypto-ego")
+            info = neighbourhood(cb, tx)
+            m = st.columns(4)
+            m[0].metric("Risk", f"{cb.risk[tx]:.3f}")
+            m[1].metric("Time step", int(cb.scores.loc[tx, "time_step"]))
+            m[2].metric("Inbound links", info["in_degree"])
+            m[3].metric("Outbound links", info["out_degree"])
+            t1, t2 = st.columns(2)
+            t1.markdown("**Sent from (inbound)**")
+            t1.dataframe(pd.DataFrame(info["inbound"]), hide_index=True)
+            t2.markdown("**Sent to (outbound)**")
+            t2.dataframe(pd.DataFrame(info["outbound"]), hide_index=True)
+            st.caption(f"Test metrics: precision {cm['precision_at_threshold']:.1%}, recall "
+                       f"{cm['recall_at_threshold']:.1%} at threshold {cm['decision_threshold']}.")
+
+if page.startswith("💬"):
+    from aml_copilot.assistant import CaseChat, account_facts, transaction_facts
+    from aml_copilot.copilot.agents import _graph_summary
+    from aml_copilot.copilot.model import FEATURES as _FEATS
+    from aml_copilot.crypto import artifacts_ready, neighbourhood
+    from aml_copilot.crypto.elliptic import demo_transactions
+
+    hero("Ask the assistant",
+         "Ask about one account or transaction in your profile: why it was flagged, what to do next, "
+         "or what the data can and cannot tell you. Answers come from fixed facts, and the case note "
+         "keeps the conversation consistent.",
+         ["grounded answers", "case notes", "no guessing", "safe guidance"])
+    if not st.session_state.get("signed_in"):
+        st.info("Sign in on the welcome page to use the assistant.")
+    else:
+        kind = st.radio("About", ["Bank account", "Bitcoin transaction"], horizontal=True, key="chat_kind")
+        if kind == "Bank account":
+            subject = st.selectbox("Account", demo_accounts(labels), key="chat_acc")
+            key = f"acc:{subject}"
+            row = bundle.features.loc[[subject]]
+            facts = account_facts(
+                account=subject, score=float(scores[subject]),
+                flags=bundle.model.elevated_features(row),
+                summary=_graph_summary(bundle.graph, bundle.features, subject),
+                known_label="illicit" if labels.get(subject, 0) else "clean",
+            )
+        else:
+            if not artifacts_ready():
+                st.warning("Bitcoin artifacts are not built yet. Build them on the Bitcoin page first.")
+                st.stop()
+            cb = get_crypto()
+            subject = st.selectbox("Transaction", demo_transactions(cb), key="chat_tx")
+            key = f"tx:{subject}"
+            info = neighbourhood(cb, subject)
+            facts = transaction_facts(
+                tx=subject, score=float(cb.risk[subject]),
+                time_step=int(cb.scores.loc[subject, "time_step"]),
+                in_links=info["in_degree"], out_links=info["out_degree"],
+                known_label=cb.scores.loc[subject, "label"],
             )
 
-        ranked = cb.risk.sort_values(ascending=False)
-        ranked = ranked[cb.scores.loc[ranked.index, "label"] != "unknown"].head(2000).index.tolist()
-        c1, c2 = st.columns([3, 1])
-        tx = c1.selectbox(
-            "Transaction (labelled, highest risk first)", ranked,
-            format_func=lambda t: f"{t}  ·  risk {cb.risk[t]:.3f}  ·  {cb.scores.loc[t, 'label']}",
-        )
-        hops = c2.slider("Hops", 1, 3, 2, key="crypto-hops")
-        st.plotly_chart(ego_network_figure(cb.graph, cb.risk.rename(str), cb.labels01.rename(str), str(tx), hops=hops, max_nodes=80),
-                        key="crypto-ego")
+        use_ai = st.toggle("Use AI for open questions", value=API_KEY_PRESENT,
+                           disabled=not API_KEY_PRESENT, key="chat_ai")
+        if st.session_state.get("chat_key") != key:
+            llm = None
+            if use_ai:
+                import anthropic
+                llm = anthropic.Anthropic()
+            st.session_state["chat_key"] = key
+            st.session_state["chat"] = CaseChat(facts=facts, kb=bundle.kb, llm=llm)
 
-        info = neighbourhood(cb, tx)
-        m = st.columns(4)
-        m[0].metric("Risk", f"{cb.risk[tx]:.3f}")
-        m[1].metric("Time step", int(cb.scores.loc[tx, "time_step"]))
-        m[2].metric("Inbound links", info["in_degree"])
-        m[3].metric("Outbound links", info["out_degree"])
-        t1, t2 = st.columns(2)
-        t1.markdown("**Sent from (inbound)**")
-        t1.dataframe(pd.DataFrame(info["inbound"]), hide_index=True)
-        t2.markdown("**Sent to (outbound)**")
-        t2.dataframe(pd.DataFrame(info["outbound"]), hide_index=True)
-        st.caption(f"Test metrics: precision {cm['precision_at_threshold']:.1%}, recall "
-                   f"{cm['recall_at_threshold']:.1%} at threshold {cm['decision_threshold']}.")
+        chat = st.session_state["chat"]
+        chat.llm = None
+        if use_ai:
+            import anthropic
+            chat.llm = anthropic.Anthropic()
+
+        st.caption("Quick questions:")
+        qcols = st.columns(4)
+        for col, q in zip(qcols, ["Why was this flagged?", "What can I do next?",
+                                  "How do I avoid being flagged?", "What is my balance?"]):
+            col.button(q, key=f"q-{q}",
+                       on_click=lambda q=q: st.session_state.update(chat_pending=q))
+
+        pending = st.session_state.pop("chat_pending", None)
+        if pending:
+            chat.ask(pending)
+
+        for role, text in chat.turns:
+            with st.chat_message("user" if role == "user" else "assistant"):
+                st.write(text)
+        prompt = st.chat_input(f"Ask about {chat.subject}")
+        if prompt:
+            chat.ask(prompt)
+            st.rerun()
+
+        with st.expander("Case notes kept for this chat", expanded=False):
+            st.caption("Facts are fixed when the chat starts. Each question is logged here.")
+            for note in chat.notes:
+                st.markdown(f"- {note}")
+            if st.button("Clear conversation", key="chat_clear"):
+                st.session_state.pop("chat", None)
+                st.session_state.pop("chat_key", None)
+                st.rerun()
 
 if page.startswith("🏠"):
     m = bundle.metrics
     hero(
-        "AML Investigation Copilot",
+        "Bank accounts · command center",
         "Transaction graph · gradient-boosted risk model · RAG over typologies · LangGraph multi-agent workflow",
         ["graph analytics", "ML scoring", "RAG", "multi-agent", "streaming UI"],
     )
@@ -482,14 +627,14 @@ elif page.startswith("🕸️"):
 
 elif page.startswith("⚡"):
     hero("Live agent workflow", "Pick an account and watch each agent run. Nodes light up as they finish; the trace streams in below.",
-         ["LangGraph", "conditional routing", "RAG", "Claude writer"])
+         ["LangGraph", "conditional routing", "RAG", "AI writer"])
     c1, c2 = st.columns([3, 1])
     account = c1.selectbox(
         "Account", ranked_accounts[:2000],
         format_func=lambda a: f"{a}  ·  risk {scores[a]:.3f}  ·  {'illicit' if labels.get(a, 0) else 'clean'}",
         key="live_account",
     )
-    use_llm = c2.toggle("Claude writer", value=API_KEY_PRESENT, disabled=not API_KEY_PRESENT)
+    use_llm = c2.toggle("AI writer", value=API_KEY_PRESENT, disabled=not API_KEY_PRESENT)
     run = st.button("▶ Run investigation", type="primary")
 
     diagram_slot = st.empty()
@@ -588,7 +733,7 @@ elif page.startswith("⏯"):
         format_func=lambda a: f"{a}  ·  risk {scores[a]:.3f}  ·  {'illicit' if labels.get(a, 0) else 'clean'}",
         key="play_account",
     )
-    use_llm = c2.toggle("Claude writer", value=False, disabled=not API_KEY_PRESENT, key="play_llm")
+    use_llm = c2.toggle("AI writer", value=False, disabled=not API_KEY_PRESENT, key="play_llm")
     speed = c3.select_slider("Speed", options=[3.0, 2.0, 1.0, 0.6, 0.3], value=3.0,
                              format_func=lambda s: f"{s}s / step")
 

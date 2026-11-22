@@ -119,3 +119,25 @@ def story_html(active: int | None = None) -> str:
             f"<span>{escape(text)}</span></div>"
         )
     return "".join(cards)
+
+
+BRIDGE_STEPS = [
+    ("🏦", "Bank accounts", "Money moves in many small steps between accounts"),
+    ("🌉", "The bridge", "Laundering often looks the same across money types: fan-out, fan-in, loops"),
+    ("₿", "Bitcoin", "The same kind of logic scores each Bitcoin transaction"),
+]
+
+CRYPTO_FLOW_STEPS = [
+    ("₿", "Transactions", "Each Bitcoin payment is a record on a public ledger"),
+    ("🕸️", "Links", "Which payments connect to which others"),
+    ("📊", "Features", "166 numbers describing each transaction"),
+    ("🧠", "Risk model", "Trained on early months, tested on later ones"),
+    ("🧑‍⚖️", "Analyst", "Flagged, watched or normal, with neighbours to inspect"),
+]
+
+HOW_TO = [
+    ("My bank accounts", "Sign in, then open 👤 My accounts. Pick an account to see its risk status and the agents' reasoning."),
+    ("My Bitcoin transactions", "Open ₿ Bitcoin, then 👛 My transactions. Pick one to see its risk and the transactions linked to it."),
+    ("Explorer", "In ₿ Bitcoin, 🔎 Explorer lets you search any labelled transaction and inspect its neighbourhood."),
+    ("System live", "🛰️ runs the whole usual process on a sample of accounts, one stage at a time."),
+]

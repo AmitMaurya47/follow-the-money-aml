@@ -141,3 +141,11 @@ def neighbourhood(bundle: CryptoBundle, tx: int, top_n: int = 8) -> dict:
         "inbound": rows(bundle.graph.predecessors(node)) if present else [],
         "outbound": rows(bundle.graph.successors(node)) if present else [],
     }
+
+
+def demo_transactions(bundle: CryptoBundle, seed: int = 11, n_illicit: int = 3, n_licit: int = 2) -> list[int]:
+    """Fixed demo profile drawn from the test period: illicit and licit transactions."""
+    test = bundle.scores[bundle.scores["split"] == "test"]
+    illicit = test[test["label"] == "illicit"].index.to_series().sample(n_illicit, random_state=seed)
+    licit = test[test["label"] == "licit"].index.to_series().sample(n_licit, random_state=seed)
+    return [int(t) for t in pd.concat([illicit, licit]).tolist()]

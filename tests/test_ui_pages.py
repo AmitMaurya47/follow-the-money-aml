@@ -47,13 +47,20 @@ def test_welcome_hero_escapes_title():
 def test_pages_render_without_exception():
     at = AppTest.from_file(str(ROOT / "copilot_ui.py"), default_timeout=120).run()
     assert not at.exception
-    assert any("How it works" in m.value for m in at.markdown)
+    assert any("How the bank side works" in m.value for m in at.markdown)
+    assert any("The story" in m.value for m in at.markdown)
+
+    at.text_input(key="login_user").input("demo")
+    at.text_input(key="login_pass").input("demo123")
+    at.button[0].click().run()  # dummy login on the welcome page
+    assert not at.exception and at.session_state["signed_in"]
 
     at.sidebar.radio[0].set_value("👤 My accounts").run()
     assert not at.exception
-    at.button[0].click().run()  # demo sign-in
-    assert not at.exception
     assert at.selectbox, "signed-in view should offer an account picker"
+
+    at.sidebar.radio[0].set_value("₿ Crypto (Elliptic)").run()
+    assert not at.exception
 
     at.sidebar.radio[0].set_value("🛰️ System live").run()
     assert not at.exception
