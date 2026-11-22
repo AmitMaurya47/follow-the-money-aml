@@ -1,4 +1,4 @@
-"""Plotly figure builders for the copilot UI (kept free of Streamlit so they can be tested)."""
+"""Plotly figure builders for the investigation UI (kept free of Streamlit so they can be tested)."""
 from __future__ import annotations
 
 import networkx as nx
@@ -26,7 +26,7 @@ WORKFLOW_LABEL = {
     "scorer": "Scorer\nrisk model",
     "graph_investigator": "Graph\ninvestigator",
     "retriever": "Retriever\nRAG",
-    "writer": "Writer\nClaude / template",
+    "writer": "Writer\nLLM / template",
     "decide": "Decide\nESCALATE / CLEAR",
 }
 WORKFLOW_EDGES = [

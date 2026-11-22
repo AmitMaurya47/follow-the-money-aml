@@ -191,7 +191,7 @@ def test_llm_success_path_uses_claude_text(synthetic_bundle):
     fake = _FakeLLM(text="Draft narrative citing [KB1].")
     out = investigate(_with_score(synthetic_bundle, 0.9), "1:A", llm=fake)
     assert out["narrative"] == "Draft narrative citing [KB1]."
-    assert out["writer_mode"] == "claude"
+    assert out["writer_mode"] == "llm"
     assert fake.calls == 1
 
 
@@ -199,7 +199,7 @@ def test_llm_failure_falls_back_to_template(synthetic_bundle):
     fake = _FakeLLM(error=RuntimeError("network down"))
     out = investigate(_with_score(synthetic_bundle, 0.9), "1:A", llm=fake)
     assert out["writer_mode"] == "template"
-    assert any("claude failed" in t for t in out["trace"])
+    assert any("llm failed" in t for t in out["trace"])
     assert out["disposition"] == "ESCALATE"
 
 

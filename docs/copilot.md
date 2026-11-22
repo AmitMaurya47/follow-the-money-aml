@@ -27,7 +27,7 @@ This layer sits alongside the Phase 1–3 triage pipeline. It adds a transaction
 
 ## Writer modes
 
-- `claude`: the writer agent calls `claude-sonnet-5-5` with only the case facts and retrieved passages. Requires `ANTHROPIC_API_KEY`.
+- `claude`: the writer agent calls `claude-haiku-5-5` with only the case facts and retrieved passages. Requires `ANTHROPIC_API_KEY`.
 - `template`: deterministic narrative. Used when no key is set, or when the Claude call fails (the failure is recorded in the trace).
 - `none`: the case was cleared early and no narrative was written.
 

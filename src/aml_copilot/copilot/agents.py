@@ -27,7 +27,7 @@ from .rag import KnowledgeBase
 from .rag_graph import GraphRetriever, signals_from_case
 
 LOW_RISK_CUTOFF = 0.15  # below this the case is cleared without investigation
-WRITER_MODEL = "claude-sonnet-5-5"
+WRITER_MODEL = "claude-haiku-5-5"
 
 FLAG_QUERIES = {
     "out_partners": "fan-out dispersal many distinct counterparties smurfing",
@@ -212,14 +212,14 @@ def build_app(bundle: AgentBundle, llm: Any | None = None):
             try:
                 return {
                     "narrative": _llm_narrative(llm, state),
-                    "writer_mode": "claude",
-                    "trace": [f"writer: claude ({WRITER_MODEL})"],
+                    "writer_mode": "llm",
+                    "trace": [f"writer: llm ({WRITER_MODEL})"],
                 }
             except Exception as exc:  # noqa: BLE001 - fall back rather than fail the case
                 return {
                     "narrative": _template_narrative(state),
                     "writer_mode": "template",
-                    "trace": [f"writer: claude failed ({type(exc).__name__}), used template"],
+                    "trace": [f"writer: llm failed ({type(exc).__name__}), used template"],
                 }
         return {
             "narrative": _template_narrative(state),
