@@ -127,6 +127,13 @@ def go_to(target: str) -> None:
     st.session_state["nav"] = target
 
 
+def ask_about(kind: str, widget_key: str, value) -> None:
+    """Button callback: open the assistant with this account or transaction already selected."""
+    st.session_state["nav"] = "💬 Ask the assistant"
+    st.session_state["chat_kind"] = kind
+    st.session_state[widget_key] = value
+
+
 def sign_out() -> None:
     st.session_state["signed_in"] = False
     st.session_state.pop("user", None)
@@ -253,6 +260,8 @@ elif page.startswith("👤"):
         st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
 
         chosen = st.selectbox("Open an account to see the agents' reasoning", [r["account"] for r in rows])
+        st.button("💬 Ask the assistant about this account", key="ask-acc",
+                  on_click=ask_about, args=("Bank account", "chat_acc", chosen))
         result = investigate(bundle.as_agent_bundle(), chosen)
         g1, g2 = st.columns([1, 2])
         with g1:
@@ -437,6 +446,8 @@ if page.startswith("₿"):
                 st.dataframe(pd.DataFrame(rows), hide_index=True)
                 st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
                 chosen = st.selectbox("Open a transaction", [r["txId"] for r in rows], key="mine-tx")
+                st.button("💬 Ask the assistant about this transaction", key="ask-tx",
+                          on_click=ask_about, args=("Bitcoin transaction", "chat_tx", chosen))
                 info = neighbourhood(cb, chosen)
                 m = st.columns(4)
                 m[0].metric("Risk", f"{cb.risk[chosen]:.3f}")
