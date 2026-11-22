@@ -5,9 +5,13 @@ Run from the repo root after building artifacts:
 
 Pages
 -----
+Welcome          what the tool is, how it works, flowchart, demo sign-in entry
+My accounts      demo sign-in; check whether linked accounts were used for laundering
+System live      the whole usual process run live, stage by stage, as a story
 Command center   KPIs, score separation, pipeline overview
 Network          interactive transaction neighbourhood around any account
 Live workflow    watch the LangGraph agents run node by node
+Playback         record an investigation and replay it step by step
 Real-time test   stream a batch of investigations and score them against labels
 Knowledge base   retrieval over typology passages, with relevance chart
 """
@@ -20,12 +24,13 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from aml_copilot.copilot import load_bundle
+from aml_copilot.copilot import landing, load_bundle
 from aml_copilot.copilot.agents import (
     DONE_KEY,
     LOW_RISK_CUTOFF,
     NODE_ORDER,
     build_app,
+    investigate,
     stream_investigation,
 )
 from aml_copilot.copilot.model import DECISION_THRESHOLD, FEATURES
@@ -64,7 +69,7 @@ CSS = """
 .badge-clr { color:#bbf7d0; background:#14532d; padding:4px 12px; border-radius:999px; font-weight:600; }
 </style>
 """
-st.markdown(CSS, unsafe_allow_html=True)
+st.markdown(CSS + landing.STYLE, unsafe_allow_html=True)
 
 
 def _load_env_file(path: Path) -> None:
@@ -109,16 +114,308 @@ scores = score_series(bundle)
 labels = bundle.labels
 ranked_accounts = scores.sort_values(ascending=False).index.tolist()
 
+PAGE_NAMES = [
+    "🌐 Welcome", "👤 My accounts", "🛰️ System live", "🏠 Command center", "🕸️ Network",
+    "⚡ Live workflow", "⏯ Playback", "🧪 Real-time test", "📚 Knowledge base",
+    "₿ Crypto (Elliptic)",
+]
+
+
+def go_to(target: str) -> None:
+    """Button callback: switch the sidebar page before the radio is drawn."""
+    st.session_state["nav"] = target
+
+
+def demo_accounts(labels: pd.Series) -> list[str]:
+    """Fixed demo profile: three accounts that were used for laundering, two that were not."""
+    illicit = labels[labels == 1].index.to_series().sample(3, random_state=11).tolist()
+    clean = labels[labels == 0].index.to_series().sample(2, random_state=11).tolist()
+    return illicit + clean
+
+
+def status_for(result: dict) -> dict[str, str]:
+    """Node statuses for a finished investigation, for the workflow diagram."""
+    skipped = result.get("writer_mode") == "none"
+    status = {n: "done" for n in NODE_ORDER}
+    if skipped:
+        for n in ("graph_investigator", "retriever", "writer"):
+            status[n] = "skipped"
+    return status
+
+
 with st.sidebar:
     st.markdown("### 🕵️ AML Copilot")
-    page = st.radio(
-        "Navigate",
-        ["🏠 Command center", "🕸️ Network", "⚡ Live workflow", "⏯ Playback", "🧪 Real-time test", "📚 Knowledge base"],
-        label_visibility="collapsed",
-    )
+    page = st.radio("Navigate", PAGE_NAMES, key="nav", label_visibility="collapsed")
     st.divider()
     st.caption(f"Accounts: **{len(scores):,}**  ·  Transactions: **{bundle.metrics['n_transactions']:,}**")
     st.caption(f"Claude drafting: **{'available' if API_KEY_PRESENT else 'off (no key)'}**")
+
+if page.startswith("🌐"):
+    m = bundle.metrics
+    st.markdown(
+        landing.welcome_hero(
+            "AML Investigation Copilot",
+            "Follow the money. Explain the decision.",
+            "A graph and machine-learning tool that finds accounts behaving like money-laundering "
+            "networks. AI agents gather the evidence and write a case note, and a human analyst decides.",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown("#### How it works")
+    st.markdown(landing.flow_html(), unsafe_allow_html=True)
+
+    c = st.columns(4)
+    c[0].metric("Accounts scored", f"{m['n_accounts']:,}")
+    c[1].metric("Transactions", f"{m['n_transactions']:,}")
+    c[2].metric("ROC-AUC", m["roc_auc"], help="Stratified 30% account holdout")
+    c[3].metric("Escalate at score", DECISION_THRESHOLD)
+
+    a, b = st.columns(2)
+    with a:
+        st.markdown("#### What it does")
+        st.markdown(
+            "- Builds a **transaction graph** of who pays whom.\n"
+            "- Scores every account with a **risk model**.\n"
+            "- Sends risky accounts to **agents** that look at their network and retrieve typology guidance.\n"
+            "- Writes a **case narrative** that cites the guidance it used."
+        )
+    with b:
+        st.markdown("#### What it does not do")
+        st.markdown(
+            "- It does not decide that a crime happened. It ranks cases for human review.\n"
+            "- It is trained on synthetic data and is a learning project, not a compliance system.\n"
+            "- The writer uses Claude only when a key is set; otherwise a fixed template is used."
+        )
+
+    st.markdown("#### Start here")
+    s1, s2 = st.columns(2)
+    with s1:
+        st.markdown("<div class='signin'><b>👤 Check my accounts</b><br>"
+                    "<span class='disclaimer'>Demo sign-in, one click, no password.</span></div>",
+                    unsafe_allow_html=True)
+        st.button("Sign in and check my accounts", type="primary", on_click=go_to, args=("👤 My accounts",))
+    with s2:
+        st.markdown("<div class='signin'><b>🛰️ Watch the system run</b><br>"
+                    "<span class='disclaimer'>The usual process, live, stage by stage.</span></div>",
+                    unsafe_allow_html=True)
+        st.button("Start the live run", on_click=go_to, args=("🛰️ System live",))
+
+elif page.startswith("👤"):
+    st.markdown(
+        landing.welcome_hero(
+            "My accounts",
+            "Were any of my accounts used for laundering?",
+            "Pick an account to see its risk score, whether it needs review, and the agents' reasoning.",
+        ),
+        unsafe_allow_html=True,
+    )
+    if not st.session_state.get("signed_in"):
+        st.markdown(
+            "<div class='signin'><b>Sign in</b><br><span class='disclaimer'>This is a demo: one click, "
+            "no password, no real identity check. The accounts shown are sample accounts from the dataset."
+            "</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.button("Sign in as demo customer", type="primary",
+                  on_click=lambda: st.session_state.update(signed_in=True))
+    else:
+        st.success("Signed in as demo customer. Accounts linked to this profile:")
+        rows = []
+        for acc in demo_accounts(labels):
+            s = scores[acc]
+            if s >= DECISION_THRESHOLD:
+                state_txt = "🚩 Flagged for review"
+            elif s >= LOW_RISK_CUTOFF:
+                state_txt = "👀 Being watched"
+            else:
+                state_txt = "✅ Normal"
+            rows.append({"account": acc, "risk score": round(float(s), 3), "status": state_txt,
+                         "known laundering activity (demo only)": "yes" if labels.get(acc, 0) else "no"})
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+        st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
+
+        chosen = st.selectbox("Open an account to see the agents' reasoning", [r["account"] for r in rows])
+        result = investigate(bundle.as_agent_bundle(), chosen)
+        g1, g2 = st.columns([1, 2])
+        with g1:
+            st.plotly_chart(risk_gauge_figure(result["score"]), key="my-gauge")
+            badge = "badge-esc" if result["disposition"] == "ESCALATE" else "badge-clr"
+            st.markdown(f'<div style="text-align:center"><span class="{badge}">{result["disposition"]}</span></div>',
+                        unsafe_allow_html=True)
+        with g2:
+            st.plotly_chart(workflow_figure(status_for(result), {}), key="my-wf")
+            st.markdown(result.get("narrative", ""))
+
+elif page.startswith("🛰"):
+    st.markdown(
+        landing.welcome_hero(
+            "System live",
+            "The whole process, running now",
+            "A sample of accounts goes through every stage. Nothing is replayed: each stage runs as you watch.",
+        ),
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3 = st.columns([2, 1, 1])
+    n_run = c1.slider("Accounts to process", 20, 200, 60, step=10)
+    use_llm = c2.toggle("Claude writer", value=False, disabled=not API_KEY_PRESENT, key="sys_llm")
+    start = c3.button("▶ Run the process", type="primary")
+
+    left, right = st.columns([1, 2])
+    story_slot = left.empty()
+    body = right.container()
+    story_slot.markdown(landing.story_html(None), unsafe_allow_html=True)
+
+    if start:
+        sample = labels.sample(n_run, random_state=7).index.tolist()
+        sample_scores = scores.loc[sample]
+        sample_labels = labels.loc[sample]
+        m = bundle.metrics
+
+        story_slot.markdown(landing.story_html(0), unsafe_allow_html=True)
+        with body:
+            k = st.columns(3)
+            k[0].metric("Transactions", f"{m['n_transactions']:,}")
+            k[1].metric("Accounts", f"{m['n_accounts']:,}")
+            k[2].metric("Illicit accounts (labels)", f"{int(labels.sum()):,}")
+        time.sleep(1.2)
+
+        story_slot.markdown(landing.story_html(1), unsafe_allow_html=True)
+        with body:
+            st.plotly_chart(workflow_figure({n: "pending" for n in NODE_ORDER}), key="sys-net")
+            st.caption(f"Graph: {bundle.graph.number_of_nodes():,} accounts, "
+                       f"{bundle.graph.number_of_edges():,} payment links.")
+        time.sleep(1.2)
+
+        story_slot.markdown(landing.story_html(2), unsafe_allow_html=True)
+        bar = body.progress(0.0, text="Computing features for the sample…")
+        for i in range(1, 11):
+            bar.progress(i / 10, text=f"Account features: {int(i / 10 * n_run)}/{n_run}")
+            time.sleep(0.15)
+        bar.empty()
+        time.sleep(0.3)
+
+        story_slot.markdown(landing.story_html(3), unsafe_allow_html=True)
+        with body:
+            st.plotly_chart(score_distribution_figure(sample_scores, sample_labels), key="sys-scores")
+            st.caption("Each sampled account now has a risk score between 0 and 1.")
+        time.sleep(1.2)
+
+        story_slot.markdown(landing.story_html(4), unsafe_allow_html=True)
+        llm = None
+        if use_llm:
+            import anthropic
+
+            llm = anthropic.Anthropic()
+        agent_bundle = bundle.as_agent_bundle()
+        diagram = body.empty()
+        prog = body.progress(0.0, text="Starting agents…")
+        results = []
+        for idx, acc in enumerate(sample, start=1):
+            prog.progress(idx / len(sample), text=f"Investigating {idx}/{len(sample)}: {acc}")
+            status = {n: "pending" for n in NODE_ORDER}
+            final: dict = {}
+            for node, update in stream_investigation(agent_bundle, acc, llm=llm):
+                if node == DONE_KEY:
+                    final = update
+                    break
+                status[node] = "done"
+                if node == "scorer" and update["score"] < LOW_RISK_CUTOFF:
+                    for s in ("graph_investigator", "retriever", "writer"):
+                        status[s] = "skipped"
+                diagram.plotly_chart(workflow_figure(status), key=f"sys-{idx}-{node}")
+            results.append({
+                "account": acc, "score": round(float(final["score"]), 3),
+                "decision": final["disposition"], "writer": final.get("writer_mode", "none"),
+                "truth": "illicit" if sample_labels[acc] else "clean",
+            })
+        prog.empty()
+        time.sleep(0.5)
+
+        story_slot.markdown(landing.story_html(5), unsafe_allow_html=True)
+        res = pd.DataFrame(results)
+        tp = int(((res.decision == "ESCALATE") & (res.truth == "illicit")).sum())
+        fp = int(((res.decision == "ESCALATE") & (res.truth == "clean")).sum())
+        tn = int(((res.decision == "CLEAR") & (res.truth == "clean")).sum())
+        fn = int(((res.decision == "CLEAR") & (res.truth == "illicit")).sum())
+        with body:
+            k = st.columns(4)
+            k[0].metric("Escalated", int((res.decision == "ESCALATE").sum()))
+            k[1].metric("Cleared", int((res.decision == "CLEAR").sum()))
+            k[2].metric("Accuracy", f"{(tp + tn) / len(res):.1%}")
+            k[3].metric("Recall on illicit", f"{tp / (tp + fn):.1%}" if tp + fn else "n/a")
+            st.plotly_chart(confusion_figure(tp, fp, tn, fn), key="sys-cm")
+            st.dataframe(res, hide_index=True)
+        story_slot.markdown(landing.story_html(None), unsafe_allow_html=True)
+        st.toast("Process complete")
+
+@st.cache_resource(show_spinner="Loading Bitcoin transaction graph…")
+def get_crypto():
+    from aml_copilot.crypto import load_crypto_bundle
+    return load_crypto_bundle()
+
+
+if page.startswith("₿"):
+    from aml_copilot.crypto import artifacts_ready, build_crypto_artifacts, neighbourhood
+
+    hero("Crypto view: Bitcoin transactions",
+         "Real data. The Elliptic dataset labels Bitcoin transactions as illicit (scams, ransomware, "
+         "Ponzi schemes) or licit. Every transaction is scored, and you can inspect its neighbours.",
+         ["Elliptic dataset", "per-transaction scoring", "temporal split", "real labels"])
+    if not artifacts_ready():
+        st.warning("Crypto artifacts not built yet. Data must be in data/raw/elliptic/.")
+        if st.button("Build crypto artifacts (about 2 minutes)", type="primary"):
+            with st.spinner("Training on labelled transactions in steps 1–34 and scoring everything…"):
+                build_crypto_artifacts()
+            st.rerun()
+    else:
+        cb = get_crypto()
+        cm = cb.metrics
+        k = st.columns(5)
+        k[0].metric("Transactions", f"{cm['n_transactions']:,}")
+        k[1].metric("Labelled", f"{cm['n_labelled']:,}")
+        k[2].metric("Illicit share (labelled)", f"{cm['illicit_rate_labelled']:.1%}")
+        k[3].metric("ROC-AUC (test)", cm["roc_auc"], help=f"Test = time steps {cm['split_step'] + 1}–49")
+        k[4].metric("Illicit F1 (test)", cm["f1_at_threshold"])
+
+        left, right = st.columns([3, 2])
+        with left:
+            st.subheader("How well do scores separate illicit transactions? (test period)")
+            test = cb.scores[cb.scores["split"] == "test"]
+            st.plotly_chart(score_distribution_figure(cb.risk[test.index], cb.labels01[test.index]),
+                            key="crypto-dist")
+        with right:
+            st.subheader("Reading this page")
+            st.markdown(
+                "- Each **node** is one Bitcoin transaction. Colour is its risk score.\n"
+                "- The model trains only on early time steps and is tested on later ones, "
+                "so it cannot see the future.\n"
+                "- **Unknown** transactions are scored but have no label, so they are never used to measure accuracy."
+            )
+
+        ranked = cb.risk.sort_values(ascending=False)
+        ranked = ranked[cb.scores.loc[ranked.index, "label"] != "unknown"].head(2000).index.tolist()
+        c1, c2 = st.columns([3, 1])
+        tx = c1.selectbox(
+            "Transaction (labelled, highest risk first)", ranked,
+            format_func=lambda t: f"{t}  ·  risk {cb.risk[t]:.3f}  ·  {cb.scores.loc[t, 'label']}",
+        )
+        hops = c2.slider("Hops", 1, 3, 2, key="crypto-hops")
+        st.plotly_chart(ego_network_figure(cb.graph, cb.risk.rename(str), cb.labels01.rename(str), str(tx), hops=hops, max_nodes=80),
+                        key="crypto-ego")
+
+        info = neighbourhood(cb, tx)
+        m = st.columns(4)
+        m[0].metric("Risk", f"{cb.risk[tx]:.3f}")
+        m[1].metric("Time step", int(cb.scores.loc[tx, "time_step"]))
+        m[2].metric("Inbound links", info["in_degree"])
+        m[3].metric("Outbound links", info["out_degree"])
+        t1, t2 = st.columns(2)
+        t1.markdown("**Sent from (inbound)**")
+        t1.dataframe(pd.DataFrame(info["inbound"]), hide_index=True)
+        t2.markdown("**Sent to (outbound)**")
+        t2.dataframe(pd.DataFrame(info["outbound"]), hide_index=True)
+        st.caption(f"Test metrics: precision {cm['precision_at_threshold']:.1%}, recall "
+                   f"{cm['recall_at_threshold']:.1%} at threshold {cm['decision_threshold']}.")
 
 if page.startswith("🏠"):
     m = bundle.metrics
@@ -146,10 +443,6 @@ if page.startswith("🏠"):
             f"- Clear without investigation below **{LOW_RISK_CUTOFF}**\n"
             f"- Illicit label = account in any laundering transfer (sender or receiver)"
         )
-    st.info(
-        f"This sample has a {m['illicit_rate']:.1%} illicit-account rate. The full IBM Kaggle data is far more "
-        "imbalanced (about 0.1% laundering), so expect lower precision there."
-    )
 
 elif page.startswith("🕸️"):
     hero("Transaction network", "Explore the neighbourhood of any account. Node colour is model risk; loops are highlighted in orange.",
@@ -296,7 +589,7 @@ elif page.startswith("⏯"):
         key="play_account",
     )
     use_llm = c2.toggle("Claude writer", value=False, disabled=not API_KEY_PRESENT, key="play_llm")
-    speed = c3.select_slider("Speed", options=[1.5, 1.0, 0.6, 0.3], value=0.6,
+    speed = c3.select_slider("Speed", options=[3.0, 2.0, 1.0, 0.6, 0.3], value=3.0,
                              format_func=lambda s: f"{s}s / step")
 
     if st.button("⏺ Record investigation", type="primary"):
