@@ -1,0 +1,16 @@
+{
+  "n_transactions": 203769,
+  "n_labelled": 46564,
+  "n_train": 29894,
+  "n_test": 16670,
+  "illicit_rate_labelled": 0.0976,
+  "test_illicit": 1083,
+  "roc_auc": 0.9385,
+  "pr_auc": 0.8028,
+  "precision_at_threshold": 0.797,
+  "recall_at_threshold": 0.7359,
+  "f1_at_threshold": 0.7652,
+  "decision_threshold": 0.5,
+  "split_step": 34,
+  "source": "elliptic_txs_features.csv"
+}
