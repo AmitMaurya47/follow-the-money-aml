@@ -884,431 +884,108 @@ class TestCrewAIRunner:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9. OpenAI Agents SDK adapter — unit, integration, parity (M4, tests 54–78)
-# ══════════════════════════════════════════════════════════════════════════════
+# 9. Claude adapter (claude-haiku-5-5) — offline tests via a fake Messages client
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _FakeBlock:
+    def __init__(self, type_, **kw):
+        self.type = type_
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+class _FakeResp:
+    def __init__(self, content, tokens=10):
+        self.content = content
+        self.usage = type("U", (), {"input_tokens": tokens, "output_tokens": 1})()
+
+
+class _FakeMessages:
+    """Replays the policy tool, then submit_decision, for every case."""
+
+    def __init__(self):
+        self.models: set[str] = set()
+        self.calls = 0
+
+    def create(self, *, model, messages, **_):
+        from aml_copilot.phase3_compare.mock_llm import mock_llm_call
+        self.models.add(model)
+        self.calls += 1
+        last = messages[-1]
+        if last["role"] == "user" and isinstance(last["content"], str):
+            evidence_json = last["content"].split("\n", 1)[1]
+            return _FakeResp([_FakeBlock("tool_use", id="t1", name="apply_aml_policy",
+                                         input={"evidence_json": evidence_json})])
+        tool_result = last["content"][0]["content"]
+        import json as _json
+        out = _json.loads(tool_result)
+        assert out == mock_llm_call(_json.loads(evidence_json_of(messages)))
+        return _FakeResp([_FakeBlock("tool_use", id="t2", name="submit_decision", input={
+            "disposition": out["disposition"],
+            "decision_reason": out["decision_reason"],
+            "agent_reasoning": out["reasoning"],
+            "human_review_flagged": out["human_review"],
+        })])
+
+
+def evidence_json_of(messages):
+    return messages[0]["content"].split("\n", 1)[1]
+
+
+class _FakeClient:
+    def __init__(self):
+        self.messages = _FakeMessages()
+
 
 @pytest.fixture(scope="module")
-def _openai_agents_results(_fixture_files_available: bool) -> list:
-    """Run the OpenAI Agents SDK adapter once; share results across all M4 tests."""
-    if not _fixture_files_available:
-        pytest.skip("Fixture files not available")
-    from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-    return OpenAIAgentsRunner().run(_EVAL_PATH, _BASELINE_PATH)
+def _claude_results(_fixture_files_available) -> list:
+    """Run the Claude adapter once on the full eval set via the fake client."""
+    from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
+    return ClaudeRunner(client=_FakeClient()).run(_EVAL_PATH, _BASELINE_PATH)
 
 
-class TestOpenAIAgentsRunner:
-    """Tests 54–78: Phase 3 M4 OpenAI Agents SDK adapter."""
-    pytestmark = [pytest.mark.integration, pytest.mark.compare, pytest.mark.slow]
+class TestClaudeRunner:
+    """Phase 3 Claude adapter: protocol, tool loop, and parity with the shared policy."""
 
-    # ── SDK imports and protocol ───────────────────────────────────────────────
-
-    def test_openai_agents_sdk_imports_cleanly(self):
-        """All required SDK symbols and the runner import without credentials."""
-        from agents import Agent, Runner, function_tool  # noqa: F401
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner  # noqa: F401
-
-    def test_openai_agents_runner_protocol(self):
-        """OpenAIAgentsRunner satisfies AMLAgentRunner at runtime."""
+    def test_claude_runner_protocol(self):
+        from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
         from aml_copilot.phase3_compare.protocol import AMLAgentRunner
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-        assert isinstance(OpenAIAgentsRunner(), AMLAgentRunner)
+        assert isinstance(ClaudeRunner(client=_FakeClient()), AMLAgentRunner)
 
-    def test_openai_agents_framework_name(self):
-        """OpenAIAgentsRunner.framework_name is 'openai_agents'."""
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-        assert OpenAIAgentsRunner.framework_name == "openai_agents"
+    def test_claude_framework_name(self):
+        from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
+        assert ClaudeRunner.framework_name == "claude"
 
-    # ── Full pipeline invariants (module-scoped fixture) ──────────────────────
+    def test_claude_model_is_haiku_only(self):
+        from aml_copilot.phase3_compare.claude_runner import CLAUDE_MODEL
+        assert CLAUDE_MODEL == "claude-haiku-5-5"
 
-    def test_openai_agents_runner_returns_90(self, _openai_agents_results):
-        """Adapter returns exactly 90 results."""
-        assert len(_openai_agents_results) == 90
+    def test_claude_runs_mini_fixtures_and_matches_shared_policy(self):
+        from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
+        from aml_copilot.phase3_compare.mock_llm import mock_llm_call
+        from aml_copilot.phase3_compare._shared import load_baseline_results, load_eval_cases
+        client = _FakeClient()
+        results = ClaudeRunner(client=client).run(_MINI_EVAL, _MINI_BASELINE)
+        cases = load_eval_cases(_MINI_EVAL)
+        baseline = load_baseline_results(_MINI_BASELINE)
+        assert len(results) == len(cases)
+        assert all(r.framework == "claude" for r in results)
+        assert client.messages.models == {"claude-haiku-5-5"}
+        assert all(r.tokens_used > 0 for r in results)
+        from aml_copilot.phase3_compare._shared import build_evidence
+        for r in results:
+            expected = mock_llm_call(build_evidence(baseline[r.case_id]))
+            assert r.disposition == expected["disposition"]
+            assert r.decision_reason == expected["decision_reason"]
 
-    def test_openai_agents_framework_tag(self, _openai_agents_results):
-        """Every result carries framework == 'openai_agents'."""
-        assert all(r.framework == "openai_agents" for r in _openai_agents_results)
-
-    def test_openai_agents_schema_valid(self, _openai_agents_results):
-        """Every returned object is a valid Phase3CaseResult."""
-        from aml_copilot.schemas import Phase3CaseResult
-        for r in _openai_agents_results:
-            assert isinstance(r, Phase3CaseResult)
-
-    def test_openai_agents_unique_case_ids(self, _openai_agents_results):
-        """No duplicate case IDs in the output."""
-        ids = [r.case_id for r in _openai_agents_results]
-        assert len(ids) == len(set(ids))
-
-    def test_openai_agents_dispositions_match_langgraph(
-        self, _openai_agents_results, _langgraph_results
-    ):
-        """All 90 dispositions are identical to LangGraph."""
-        lg_map = {r.case_id: r.disposition for r in _langgraph_results}
-        mismatches = [
-            (r.case_id, r.disposition, lg_map.get(r.case_id))
-            for r in _openai_agents_results
-            if r.disposition != lg_map.get(r.case_id)
-        ]
-        assert mismatches == [], (
-            f"{len(mismatches)} disposition mismatches vs LangGraph: {mismatches[:5]}"
-        )
-
-    def test_openai_agents_dispositions_match_crewai(
-        self, _openai_agents_results, _crewai_results
-    ):
-        """All 90 dispositions are identical to CrewAI."""
-        ca_map = {r.case_id: r.disposition for r in _crewai_results}
-        mismatches = [
-            (r.case_id, r.disposition, ca_map.get(r.case_id))
-            for r in _openai_agents_results
-            if r.disposition != ca_map.get(r.case_id)
-        ]
-        assert mismatches == [], (
-            f"{len(mismatches)} disposition mismatches vs CrewAI: {mismatches[:5]}"
-        )
-
-    def test_openai_agents_policy_fields_match_langgraph(
-        self, _openai_agents_results, _langgraph_results
-    ):
-        """All policy-output fields match LangGraph for all 90 cases."""
-        lg_map = {r.case_id: r for r in _langgraph_results}
-        policy_fields = [
-            "disposition", "decision_reason", "agent_reasoning",
-            "agent_override", "baseline_disposition", "human_review_flagged",
-            "tokens_used", "cost_usd",
-        ]
-        mismatches = []
-        for r in _openai_agents_results:
-            lg = lg_map.get(r.case_id)
-            if lg is None:
-                mismatches.append((r.case_id, "missing from LangGraph"))
-                continue
-            for field in policy_fields:
-                oa_val = getattr(r, field)
-                lg_val = getattr(lg, field)
-                if oa_val != lg_val:
-                    mismatches.append((r.case_id, field, oa_val, lg_val))
-        assert mismatches == [], (
-            f"Policy field mismatches vs LangGraph: {mismatches[:5]}"
-        )
-
-    def test_openai_agents_evidence_fields_match(
-        self, _openai_agents_results, _langgraph_results
-    ):
-        """Evidence fields (sanctions_hits, rule_firings, anomaly_score) match LangGraph."""
-        lg_map = {r.case_id: r for r in _langgraph_results}
-        evidence_fields = ["sanctions_hits", "rule_firings", "anomaly_score"]
-        mismatches = []
-        for r in _openai_agents_results:
-            lg = lg_map.get(r.case_id)
-            if lg is None:
-                continue
-            for field in evidence_fields:
-                if getattr(r, field) != getattr(lg, field):
-                    mismatches.append((r.case_id, field))
-        assert mismatches == [], (
-            f"Evidence field mismatches vs LangGraph: {mismatches[:5]}"
-        )
-
-    def test_openai_agents_accuracy_matches(self, _openai_agents_results):
-        """Disposition accuracy equals the committed Phase 2 metric."""
-        gold: dict[str, str] = {}
-        with open(_EVAL_PATH, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line:
-                    from aml_copilot.schemas import EvalCase
-                    c = EvalCase.model_validate_json(line)
-                    gold[c.case_id] = c.gold_label
-
-        correct = sum(1 for r in _openai_agents_results if gold.get(r.case_id) == r.disposition)
-        accuracy = correct / len(_openai_agents_results)
-        assert accuracy == pytest.approx(_EXPECTED_P2_ACCURACY, abs=1e-10), (
-            f"OpenAI Agents accuracy {accuracy:.10f} differs from "
-            f"expected {_EXPECTED_P2_ACCURACY:.10f}"
-        )
-
-    def test_openai_agents_zero_cost(self, _openai_agents_results):
-        """Every result has tokens_used == 0 and cost_usd == 0.0."""
-        bad = [
-            (r.case_id, r.tokens_used, r.cost_usd)
-            for r in _openai_agents_results
-            if r.tokens_used != 0 or r.cost_usd != 0.0
-        ]
-        assert bad == [], f"Non-zero cost/token entries: {bad}"
-
-    def test_openai_agents_no_network_calls(self, monkeypatch, _require_fixture_files):
-        """Running one case makes zero HTTP calls."""
-        import httpx
-        import urllib.request
-
-        network_calls: list[str] = []
-
-        def fail_httpx(self_inner, *args, **kwargs):
-            network_calls.append(f"httpx.Client.request({args[:1]})")
-            raise RuntimeError("Network call intercepted!")
-
-        def fail_httpx_async(self_inner, *args, **kwargs):
-            network_calls.append(f"httpx.AsyncClient.request({args[:1]})")
-            raise RuntimeError("Network call intercepted!")
-
-        def fail_urllib(*args, **kwargs):
-            network_calls.append(f"urllib.urlopen({args[:1]})")
-            raise RuntimeError("Network call intercepted!")
-
-        monkeypatch.setattr(httpx.Client, "request", fail_httpx)
-        monkeypatch.setattr(httpx.AsyncClient, "request", fail_httpx_async)
-        monkeypatch.setattr(urllib.request, "urlopen", fail_urllib)
-
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            OpenAIAgentsRunner,
-        )
-
-        runner = OpenAIAgentsRunner()
-        results = runner.run(_EVAL_PATH, _BASELINE_PATH)
-        assert len(results) == 90
-        assert network_calls == [], (
-            f"Unexpected network calls: {network_calls}"
-        )
-
-    def test_openai_agents_no_api_key_required(self, monkeypatch, _require_fixture_files):
-        """Runner succeeds with OPENAI_API_KEY removed from environment."""
-        import os
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            OpenAIAgentsRunner,
-        )
-
-        runner = OpenAIAgentsRunner()
-        results = runner.run(_EVAL_PATH, _BASELINE_PATH)
-        assert len(results) == 90
-
-    def test_openai_agents_environment_unchanged(
-        self, monkeypatch, _require_fixture_files
-    ):
-        """Run does not mutate any OpenAI environment variables."""
-        import os
-
-        tracked_vars = [
-            "OPENAI_API_KEY",
-            "OPENAI_BASE_URL",
-            "OPENAI_ORG_ID",
-            "OPENAI_PROJECT_ID",
-            "OPENAI_AGENTS_DISABLE_TRACING",
-        ]
-        before = {v: os.environ.get(v) for v in tracked_vars}
-
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            OpenAIAgentsRunner,
-        )
-
-        OpenAIAgentsRunner().run(_EVAL_PATH, _BASELINE_PATH)
-        after = {v: os.environ.get(v) for v in tracked_vars}
-        assert before == after, f"Environment mutated: {before} -> {after}"
-
-    def test_openai_agents_runner_actually_invoked(self, monkeypatch, _require_fixture_files):
-        """Runner.run_sync is genuinely called during a full run."""
-        from agents import Runner
-        import aml_copilot.phase3_compare.openai_agents_runner as module
-
-        run_sync_count = {"n": 0}
-        original_run_sync = Runner.run_sync
-
-        def spy_run_sync(agent, input, **kwargs):
-            run_sync_count["n"] += 1
-            return original_run_sync(agent, input, **kwargs)
-
-        monkeypatch.setattr(Runner, "run_sync", staticmethod(spy_run_sync))
-
-        module.OpenAIAgentsRunner().run(_EVAL_PATH, _BASELINE_PATH)
-        assert run_sync_count["n"] == 90, (
-            f"Expected 90 Runner.run_sync calls; got {run_sync_count['n']}"
-        )
-
-    def test_openai_agents_function_tools_are_invoked(self, monkeypatch, _require_fixture_files):
-        """Both parse_evidence and decide_disposition execute during one case run."""
-        import json
-        import aml_copilot.phase3_compare.openai_agents_runner as module
-
-        invoked: list[str] = []
-        orig_parse = module.parse_evidence.on_invoke_tool
-        orig_decide = module.decide_disposition.on_invoke_tool
-
-        async def spy_parse(ctx, args):
-            invoked.append("parse_evidence")
-            return await orig_parse(ctx, args)
-
-        async def spy_decide(ctx, args):
-            invoked.append("decide_disposition")
-            return await orig_decide(ctx, args)
-
-        monkeypatch.setattr(module.parse_evidence, "on_invoke_tool", spy_parse)
-        monkeypatch.setattr(module.decide_disposition, "on_invoke_tool", spy_decide)
-
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            _run_agent,
-            _build_case_data,
-            _create_agent,
-            _load_baseline_results,
-        )
-        from agents import RunConfig
-
-        baseline_map = _load_baseline_results(_BASELINE_PATH)
-        first_baseline = next(iter(baseline_map.values()))
-        case_data = _build_case_data(first_baseline)
-        agent = _create_agent()
-        _run_agent(agent, json.dumps(case_data), RunConfig(tracing_disabled=True))
-
-        assert "parse_evidence" in invoked, "parse_evidence was not invoked"
-        assert "decide_disposition" in invoked, "decide_disposition was not invoked"
-
-    def test_openai_agents_structured_output_used(self, _openai_agents_results):
-        """final_output for every case is an OpenAIAgentDecision Pydantic instance."""
-        import json
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            OpenAIAgentDecision,
-            _run_agent,
-            _build_case_data,
-            _create_agent,
-            _load_baseline_results,
-        )
-        from agents import RunConfig
-        baseline_map = _load_baseline_results(_BASELINE_PATH)
-        first_baseline = next(iter(baseline_map.values()))
-        case_data = _build_case_data(first_baseline)
-        agent = _create_agent()
-        result = _run_agent(agent, json.dumps(case_data), RunConfig(tracing_disabled=True))
-        assert isinstance(result.final_output, OpenAIAgentDecision), (
-            f"Expected OpenAIAgentDecision, got {type(result.final_output).__name__}"
-        )
-
-    def test_openai_agents_deterministic(self, _require_fixture_files):
-        """Same input produces identical non-latency output on two successive runs."""
-        import json
-        from aml_copilot.phase3_compare.openai_agents_runner import (
-            _run_agent,
-            _build_case_data,
-            _create_agent,
-            _load_baseline_results,
-        )
-        from agents import RunConfig
-        baseline_map = _load_baseline_results(_BASELINE_PATH)
-        first_baseline = next(iter(baseline_map.values()))
-        case_data = _build_case_data(first_baseline)
-        agent = _create_agent()
-        run_config = RunConfig(tracing_disabled=True)
-        input_json = json.dumps(case_data)
-
-        r1 = _run_agent(agent, input_json, run_config).final_output
-        r2 = _run_agent(agent, input_json, run_config).final_output
-
-        assert r1.model_dump() == r2.model_dump(), (
-            f"Non-deterministic output: {r1.model_dump()} != {r2.model_dump()}"
-        )
-
-    def test_openai_agents_invalid_join_raises(self, _require_fixture_files):
-        """Missing baseline result raises RuntimeError naming the case_id."""
-        import tempfile, json
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-        from aml_copilot.schemas import EvalCase
-
-        # Build eval with one case that has no matching baseline
-        with open(_EVAL_PATH, encoding="utf-8") as fh:
-            lines = [l.strip() for l in fh if l.strip()]
-        first_case = EvalCase.model_validate_json(lines[0])
-
-        # Create a baseline file with only a different account
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-            empty_baseline = f.name
-
-        import pathlib
-        pathlib.Path(empty_baseline).write_text("", encoding="utf-8")
-
-        with pytest.raises(RuntimeError, match=first_case.case_id):
-            OpenAIAgentsRunner().run(_EVAL_PATH, pathlib.Path(empty_baseline))
-
-        pathlib.Path(empty_baseline).unlink(missing_ok=True)
-
-    def test_openai_agents_duplicate_case_id_raises(self):
-        """Duplicate case IDs in results trigger a RuntimeError."""
-        import json
-        from aml_copilot.phase3_compare.openai_agents_runner import _validate
-        from aml_copilot.schemas import Phase3CaseResult, SanctionsHit
-        from datetime import datetime, timezone
-
-        # Build two results with the same case_id
-        dummy = Phase3CaseResult(
-            framework="openai_agents",
-            case_id="DUPLICATE-001",
-            account_id="ACC-001",
-            disposition="CLEAR",
-            decision_reason="clear",
-            sanctions_hits=[],
-            rule_firings=[],
-            anomaly_score=None,
-            latency_ms=1.0,
-            agent_reasoning="no risk",
-            agent_override=False,
-            baseline_disposition="CLEAR",
-            human_review_flagged=False,
-        )
-        # Fill to 90 with distinct IDs except one duplicate pair
-        results = []
-        for i in range(89):
-            results.append(dummy.model_copy(update={"case_id": f"CASE-{i:03d}"}))
-        results.append(dummy.model_copy(update={"case_id": "CASE-000"}))  # duplicate
-
-        with pytest.raises(RuntimeError, match="duplicate"):
-            _validate(results)
-
-    def test_openai_agents_framework_failure_never_clears(self, monkeypatch, _require_fixture_files):
-        """SDK execution failure raises RuntimeError — never returns a fabricated CLEAR."""
-        from agents import Runner
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-
-        def fail_run_sync(*args, **kwargs):
-            raise RuntimeError("Simulated SDK failure")
-
-        monkeypatch.setattr(Runner, "run_sync", staticmethod(fail_run_sync))
-
-        with pytest.raises(RuntimeError):
-            OpenAIAgentsRunner().run(_EVAL_PATH, _BASELINE_PATH)
-
-    # ── Three-framework aggregate tests ───────────────────────────────────────
-
-    def test_all_three_frameworks_agree(
-        self, _openai_agents_results, _langgraph_results, _crewai_results
-    ):
-        """All 90 dispositions are identical across LangGraph, CrewAI, and OpenAI Agents."""
-        lg_map = {r.case_id: r.disposition for r in _langgraph_results}
-        ca_map = {r.case_id: r.disposition for r in _crewai_results}
-        diffs = []
-        for r in _openai_agents_results:
-            lg = lg_map.get(r.case_id)
-            ca = ca_map.get(r.case_id)
-            if r.disposition != lg or r.disposition != ca:
-                diffs.append((r.case_id, r.disposition, lg, ca))
-        assert diffs == [], f"Three-framework disagreements: {diffs[:5]}"
-
-    def test_all_three_zero_cost(
-        self, _openai_agents_results, _langgraph_results, _crewai_results
-    ):
-        """Every result from every framework has tokens_used == 0 and cost_usd == 0.0."""
-        all_results = (
-            list(_langgraph_results)
-            + list(_crewai_results)
-            + list(_openai_agents_results)
-        )
-        bad = [
-            (r.framework, r.case_id, r.tokens_used, r.cost_usd)
-            for r in all_results
-            if r.tokens_used != 0 or r.cost_usd != 0.0
-        ]
-        assert bad == [], f"Non-zero cost/token entries: {bad}"
+    def test_claude_missing_api_key_raises(self, monkeypatch):
+        from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            ClaudeRunner()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # 10. Shared helpers (_shared.py) — unit tests
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1504,12 +1181,12 @@ class TestEvidenceParity:
         assert mismatches == [], f"Evidence mismatch (CrewAI vs LangGraph): {mismatches[:5]}"
 
     def test_build_evidence_openai_langgraph_identical(
-        self, _openai_agents_results, _langgraph_results
+        self, _claude_results, _langgraph_results
     ):
-        """OpenAI Agents and LangGraph carry identical sanctions_hits, rule_firings, anomaly_score."""
+        """Claude and LangGraph carry identical sanctions_hits, rule_firings, anomaly_score."""
         lg_map = {r.case_id: r for r in _langgraph_results}
         mismatches = []
-        for oa in _openai_agents_results:
+        for oa in _claude_results:
             lg = lg_map.get(oa.case_id)
             if lg is None:
                 mismatches.append((oa.case_id, "missing from LangGraph"))
@@ -1518,7 +1195,7 @@ class TestEvidenceParity:
                 if getattr(oa, field) != getattr(lg, field):
                     mismatches.append((oa.case_id, field))
         assert mismatches == [], (
-            f"Evidence mismatch (OpenAI Agents vs LangGraph): {mismatches[:5]}"
+            f"Evidence mismatch (Claude vs LangGraph): {mismatches[:5]}"
         )
 
     def test_build_evidence_unit_produces_identical_output(self):
@@ -1601,10 +1278,10 @@ class TestPolicyBoundariesThroughAdapters:
             "LangGraph adapter ignored mock_llm_call patch — inline policy suspected"
         )
 
-    def test_openai_agents_delegates_policy_to_mock_llm(self, monkeypatch):
-        """Patching mock_llm_call changes OpenAI Agents output — confirms no inline policy."""
+    def test_claude_delegates_policy_to_mock_llm(self, monkeypatch):
+        """Patching mock_llm_call changes Claude output — confirms no inline policy."""
         import json
-        import aml_copilot.phase3_compare.openai_agents_runner as module
+        import aml_copilot.phase3_compare.claude_runner as module
 
         def always_clear(evidence):
             return {
@@ -1617,7 +1294,7 @@ class TestPolicyBoundariesThroughAdapters:
 
         monkeypatch.setattr(module, "mock_llm_call", always_clear)
 
-        from aml_copilot.phase3_compare.openai_agents_runner import (
+        from aml_copilot.phase3_compare.claude_runner import (
             _run_agent,
             _create_agent,
         )
@@ -1633,7 +1310,7 @@ class TestPolicyBoundariesThroughAdapters:
         agent = _create_agent()
         sdk_result = _run_agent(agent, json.dumps(evidence), RunConfig(tracing_disabled=True))
         assert sdk_result.final_output.disposition == "CLEAR", (
-            "OpenAI Agents adapter ignored mock_llm_call patch — inline policy suspected"
+            "Claude adapter ignored mock_llm_call patch — inline policy suspected"
         )
 
 
@@ -1667,10 +1344,10 @@ class TestLatencyMethodology:
         _run_crew(evidence, verbose=False)
         assert len(kickoff_durations) == 1, "Expected exactly one Crew.kickoff call"
 
-    def test_openai_agents_run_sync_is_timed(self, monkeypatch):
-        """OpenAIAgentsRunner records positive latency_ms sourced from Runner.run_sync()."""
+    def test_claude_run_sync_is_timed(self, monkeypatch):
+        """ClaudeRunner records positive latency_ms sourced from Runner.run_sync()."""
         from agents import Runner
-        import aml_copilot.phase3_compare.openai_agents_runner as module
+        import aml_copilot.phase3_compare.claude_runner as module
 
         run_sync_called = {"count": 0}
         original_run_sync = Runner.run_sync
@@ -1682,7 +1359,7 @@ class TestLatencyMethodology:
         monkeypatch.setattr(Runner, "run_sync", staticmethod(spy_run_sync))
 
         import json
-        from aml_copilot.phase3_compare.openai_agents_runner import (
+        from aml_copilot.phase3_compare.claude_runner import (
             _run_agent,
             _create_agent,
         )
@@ -1704,9 +1381,9 @@ class TestLatencyMethodology:
         non_positive = [r.case_id for r in _crewai_results if r.latency_ms <= 0]
         assert non_positive == [], f"Zero/negative latency in cases: {non_positive}"
 
-    def test_openai_agents_latency_positive_in_full_run(self, _openai_agents_results):
-        """Every OpenAI Agents case result has latency_ms > 0."""
-        non_positive = [r.case_id for r in _openai_agents_results if r.latency_ms <= 0]
+    def test_claude_latency_positive_in_full_run(self, _claude_results):
+        """Every Claude case result has latency_ms > 0."""
+        non_positive = [r.case_id for r in _claude_results if r.latency_ms <= 0]
         assert non_positive == [], f"Zero/negative latency in cases: {non_positive}"
 
 
@@ -1808,10 +1485,10 @@ class TestM5RegistryAndSchema:
             )
 
     def test_registry_order_is_deterministic(self):
-        """Registry order is langgraph → crewai → openai_agents."""
+        """Registry order is langgraph → crewai → claude."""
         from aml_copilot.phase3_compare.run_comparison import RUNNER_REGISTRY
         names = [cls.framework_name for cls, _ in RUNNER_REGISTRY]
-        assert names == ["langgraph", "crewai", "openai_agents"]
+        assert names == ["langgraph", "crewai", "claude"]
 
     def test_registry_runner_files_exist(self):
         """Every runner file path in the registry points to an existing file."""
@@ -1849,7 +1526,7 @@ class TestM5RegistryAndSchema:
         """get_framework_versions() returns entries for all three Phase 3 frameworks."""
         from aml_copilot.phase3_compare.metrics import get_framework_versions
         v = get_framework_versions()
-        for key in ("langgraph", "crewai", "openai_agents"):
+        for key in ("langgraph", "crewai", "claude"):
             assert key in v, f"Missing version key: {key}"
 
     def test_phase3_framework_metrics_new_fields_have_defaults(self):
@@ -2180,7 +1857,7 @@ class TestM5RunnerIsolation:
     pytestmark = [pytest.mark.integration, pytest.mark.compare, pytest.mark.slow]
 
     def test_one_runner_failure_does_not_abort_others(self, monkeypatch, tmp_path, _require_fixture_files):
-        """When CrewAI raises, LangGraph and OpenAI Agents still complete."""
+        """When CrewAI raises, LangGraph and Claude still complete."""
         import aml_copilot.phase3_compare.run_comparison as comp_module
         from aml_copilot.phase3_compare.crewai_runner import CrewAIRunner
 
@@ -2192,10 +1869,10 @@ class TestM5RunnerIsolation:
         out = tmp_path / "comparison.json"
         comparison = comp_module.run(_EVAL_PATH, _BASELINE_PATH, out)
 
-        # LangGraph and OpenAI Agents should still produce results
+        # LangGraph and Claude should still produce results
         fw_names = {m.framework for m in comparison.frameworks}
         assert "langgraph" in fw_names
-        assert "openai_agents" in fw_names
+        assert "claude" in fw_names
         # CrewAI is absent due to failure
         assert "crewai" not in fw_names
         # comparison_passed must be False (runner failed)
@@ -2205,7 +1882,7 @@ class TestM5RunnerIsolation:
         """When all runners fail, frameworks list is empty and comparison_passed=False."""
         from aml_copilot.phase3_compare.langgraph_runner import LangGraphRunner
         from aml_copilot.phase3_compare.crewai_runner import CrewAIRunner
-        from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
+        from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
         import aml_copilot.phase3_compare.run_comparison as comp_module
 
         def fail(self_inner, ep, bp):
@@ -2213,7 +1890,7 @@ class TestM5RunnerIsolation:
 
         monkeypatch.setattr(LangGraphRunner, "run", fail)
         monkeypatch.setattr(CrewAIRunner, "run", fail)
-        monkeypatch.setattr(OpenAIAgentsRunner, "run", fail)
+        monkeypatch.setattr(ClaudeRunner, "run", fail)
 
         out = tmp_path / "comparison.json"
         comparison = comp_module.run(_EVAL_PATH, _BASELINE_PATH, out)
@@ -2296,7 +1973,7 @@ class TestM5ComparisonIntegration:
         assert len(_comparison_metrics.frameworks) == 3
 
     def test_framework_order_matches_registry(self, _comparison_metrics):
-        """Framework entries appear in registry order: langgraph, crewai, openai_agents."""
+        """Framework entries appear in registry order: langgraph, crewai, claude."""
         from aml_copilot.phase3_compare.run_comparison import RUNNER_REGISTRY
         registry_order = [cls.framework_name for cls, _ in RUNNER_REGISTRY]
         result_order = [m.framework for m in _comparison_metrics.frameworks]
@@ -2532,21 +2209,21 @@ def _mini_crewai_results() -> "list[Phase3CaseResult]":
 
 
 @pytest.fixture(scope="module")
-def _mini_openai_agents_results() -> "list[Phase3CaseResult]":
-    from aml_copilot.phase3_compare.testing import run_mini_openai_agents
-    return run_mini_openai_agents()
+def _mini_claude_results() -> "list[Phase3CaseResult]":
+    from aml_copilot.phase3_compare.testing import run_mini_claude
+    return run_mini_claude(client=_FakeClient())
 
 
 @pytest.fixture(scope="module")
 def _mini_all_results(
     _mini_langgraph_results,
     _mini_crewai_results,
-    _mini_openai_agents_results,
+    _mini_claude_results,
 ) -> "dict[str, list[Phase3CaseResult]]":
     return {
         "langgraph":      _mini_langgraph_results,
         "crewai":         _mini_crewai_results,
-        "openai_agents":  _mini_openai_agents_results,
+        "claude":  _mini_claude_results,
     }
 
 
@@ -2661,9 +2338,9 @@ class TestM6MiniFixtures:
         """CrewAI produces exactly 5 results on mini fixture."""
         assert len(_mini_crewai_results) == _MINI_N
 
-    def test_openai_agents_mini_returns_five(self, _mini_openai_agents_results):
-        """OpenAI Agents produces exactly 5 results on mini fixture."""
-        assert len(_mini_openai_agents_results) == _MINI_N
+    def test_claude_mini_returns_five(self, _mini_claude_results):
+        """Claude produces exactly 5 results on mini fixture."""
+        assert len(_mini_claude_results) == _MINI_N
 
     # ── 4. Expected dispositions ──────────────────────────────────────────────
 
@@ -2706,7 +2383,7 @@ class TestM6MiniFixtures:
     # ── 5. Three-way parity ───────────────────────────────────────────────────
 
     def test_three_way_parity_dispositions(self, _mini_all_results):
-        """LangGraph, CrewAI, and OpenAI Agents produce identical dispositions on mini fixture."""
+        """LangGraph, CrewAI, and Claude produce identical dispositions on mini fixture."""
         from aml_copilot.phase3_compare.metrics import check_framework_agreement
         ag = check_framework_agreement(_mini_all_results)
         assert ag["all_dispositions_agree"] is True, (
@@ -2767,15 +2444,15 @@ class TestM6MiniFixtures:
         results = run_mini_crewai()
         assert len(results) == _MINI_N
 
-    def test_no_network_calls_openai_agents(self, monkeypatch):
-        """OpenAI Agents mini-run makes zero HTTP calls."""
+    def test_no_network_calls_claude(self, monkeypatch):
+        """Claude mini-run makes zero HTTP calls."""
         import httpx
         def fail_http(self_inner, *a, **kw):
-            raise AssertionError("Network call detected in OpenAI Agents mini-run")
+            raise AssertionError("Network call detected in Claude mini-run")
         monkeypatch.setattr(httpx.Client, "send", fail_http)
         monkeypatch.setattr(httpx.AsyncClient, "send", fail_http)
-        from aml_copilot.phase3_compare.testing import run_mini_openai_agents
-        results = run_mini_openai_agents()
+        from aml_copilot.phase3_compare.testing import run_mini_claude
+        results = run_mini_claude()
         assert len(results) == _MINI_N
 
     def test_no_api_key_required(self, monkeypatch):
@@ -2784,11 +2461,11 @@ class TestM6MiniFixtures:
                     "OPENAI_PROJECT_ID", "OPENAI_AGENTS_DISABLE_TRACING"):
             monkeypatch.delenv(var, raising=False)
         from aml_copilot.phase3_compare.testing import (
-            run_mini_langgraph, run_mini_crewai, run_mini_openai_agents,
+            run_mini_langgraph, run_mini_crewai, run_mini_claude,
         )
         assert len(run_mini_langgraph()) == _MINI_N
         assert len(run_mini_crewai()) == _MINI_N
-        assert len(run_mini_openai_agents()) == _MINI_N
+        assert len(run_mini_claude()) == _MINI_N
 
     def test_environment_variables_unchanged_after_run(self, monkeypatch):
         """Runner execution does not modify environment variables."""
@@ -3220,100 +2897,6 @@ class TestRunComparisonFormatters:
         assert isinstance(err, RuntimeError)
 
 
-class TestOpenAIAgentsValidateShim:
-    """Coverage for the _validate backward-compat shim in openai_agents_runner."""
-
-    pytestmark = [pytest.mark.compare]
-
-    def test_validate_shim_wrong_count_raises(self):
-        """_validate shim raises when result count != EXPECTED_EVAL_SIZE."""
-        from aml_copilot.phase3_compare.openai_agents_runner import _validate
-        from aml_copilot.schemas import Phase3CaseResult
-
-        def _r(cid: str) -> Phase3CaseResult:
-            return Phase3CaseResult(
-                framework="openai_agents", case_id=cid, account_id="A",
-                disposition="CLEAR", decision_reason="clear",
-                sanctions_hits=[], rule_firings=[], anomaly_score=None,
-                latency_ms=1.0, agent_reasoning="", agent_override=False,
-                baseline_disposition="CLEAR", human_review_flagged=False,
-            )
-
-        with pytest.raises(RuntimeError):
-            _validate([_r("C1"), _r("C2")])  # << 90
-
-    def test_validate_shim_duplicate_raises(self):
-        """_validate shim raises on duplicate case_ids."""
-        from aml_copilot.phase3_compare._shared import EXPECTED_EVAL_SIZE
-        from aml_copilot.phase3_compare.openai_agents_runner import _validate
-        from aml_copilot.schemas import Phase3CaseResult
-
-        def _r(cid: str) -> Phase3CaseResult:
-            return Phase3CaseResult(
-                framework="openai_agents", case_id=cid, account_id="A",
-                disposition="CLEAR", decision_reason="clear",
-                sanctions_hits=[], rule_firings=[], anomaly_score=None,
-                latency_ms=1.0, agent_reasoning="", agent_override=False,
-                baseline_disposition="CLEAR", human_review_flagged=False,
-            )
-
-        results = [_r(f"CASE-{i:03d}") for i in range(EXPECTED_EVAL_SIZE - 1)]
-        results.append(_r("CASE-000"))  # duplicate
-        with pytest.raises(RuntimeError, match="duplicate"):
-            _validate(results)
-
-    def test_validate_shim_wrong_framework_raises(self):
-        """_validate shim raises when framework tag != openai_agents."""
-        from aml_copilot.phase3_compare._shared import EXPECTED_EVAL_SIZE
-        from aml_copilot.phase3_compare.openai_agents_runner import _validate
-        from aml_copilot.schemas import Phase3CaseResult
-
-        results = [
-            Phase3CaseResult(
-                framework="langgraph", case_id=f"CASE-{i:03d}", account_id="A",
-                disposition="CLEAR", decision_reason="clear",
-                sanctions_hits=[], rule_firings=[], anomaly_score=None,
-                latency_ms=1.0, agent_reasoning="", agent_override=False,
-                baseline_disposition="CLEAR", human_review_flagged=False,
-            )
-            for i in range(EXPECTED_EVAL_SIZE)
-        ]
-        with pytest.raises(RuntimeError, match="wrong framework"):
-            _validate(results)
-
-    def test_stream_response_raises_not_implemented(self):
-        """DeterministicAMLModel.stream_response raises NotImplementedError when awaited."""
-        import asyncio
-        from aml_copilot.phase3_compare.openai_agents_runner import DeterministicAMLModel
-
-        async def _test():
-            model = DeterministicAMLModel()
-            await model.stream_response()
-
-        with pytest.raises(NotImplementedError):
-            asyncio.run(_test())
-
-    def test_validate_shim_bad_tokens_raises(self):
-        """_validate shim raises when tokens_used != 0."""
-        from aml_copilot.phase3_compare._shared import EXPECTED_EVAL_SIZE
-        from aml_copilot.phase3_compare.openai_agents_runner import _validate
-        from aml_copilot.schemas import Phase3CaseResult
-
-        results = [
-            Phase3CaseResult(
-                framework="openai_agents", case_id=f"CASE-{i:03d}", account_id="A",
-                disposition="CLEAR", decision_reason="clear",
-                sanctions_hits=[], rule_firings=[], anomaly_score=None,
-                latency_ms=1.0, agent_reasoning="", agent_override=False,
-                baseline_disposition="CLEAR", human_review_flagged=False,
-                tokens_used=5,
-            )
-            for i in range(EXPECTED_EVAL_SIZE)
-        ]
-        with pytest.raises(RuntimeError, match="tokens"):
-            _validate(results)
-
-
 class TestSharedHelpersMissingCoverage:
     """Cover the missing-case error paths in validate_phase3_results."""
 
@@ -3439,13 +3022,13 @@ class TestRunComparisonImportSafety:
         assert "eval" in result.stdout.lower()
 
     def test_runner_spec_order_preserved(self):
-        """_RUNNER_SPECS order is langgraph → crewai → openai_agents.
+        """_RUNNER_SPECS order is langgraph → crewai → claude.
 
         Imports only the spec list — no framework runners are loaded.
         """
         from aml_copilot.phase3_compare.run_comparison import _RUNNER_SPECS
         class_names = [spec[1] for spec in _RUNNER_SPECS]
-        assert class_names == ["LangGraphRunner", "CrewAIRunner", "OpenAIAgentsRunner"]
+        assert class_names == ["LangGraphRunner", "CrewAIRunner", "ClaudeRunner"]
 
     def test_runner_spec_has_three_entries(self):
         """_RUNNER_SPECS contains exactly three entries."""
@@ -3460,7 +3043,7 @@ class TestRunComparisonImportSafety:
         original_import = importlib.import_module
 
         def fake_import(name: str, *args, **kwargs):
-            if "crewai_runner" in name or "openai_agents_runner" in name:
+            if "crewai_runner" in name or "claude_runner" in name:
                 raise ModuleNotFoundError(f"No module named 'crewai'")
             return original_import(name, *args, **kwargs)
 
@@ -3492,10 +3075,10 @@ class TestRunComparisonImportSafety:
 
     @pytest.mark.compare
     def test_runner_registry_order_with_deps_installed(self):
-        """RUNNER_REGISTRY preserves langgraph → crewai → openai_agents when deps installed."""
+        """RUNNER_REGISTRY preserves langgraph → crewai → claude when deps installed."""
         from aml_copilot.phase3_compare.run_comparison import RUNNER_REGISTRY
         names = [cls.framework_name for cls, _ in RUNNER_REGISTRY]
-        assert names == ["langgraph", "crewai", "openai_agents"]
+        assert names == ["langgraph", "crewai", "claude"]
 
     @pytest.mark.compare
     def test_mini_comparison_passes_with_compare_deps(self, tmp_path):

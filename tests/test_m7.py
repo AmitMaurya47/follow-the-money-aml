@@ -116,7 +116,7 @@ class TestReadmeContent:
         bad_phrases = [
             "LangGraph is more accurate",
             "CrewAI is more accurate",
-            "OpenAI Agents is more accurate",
+            "Claude is more accurate",
             "one framework outperforms",
         ]
         for phrase in bad_phrases:
@@ -351,7 +351,7 @@ class TestComparisonArtifact:
 
     def test_artifact_framework_names(self, _m7_artifact_schema):
         names = {m.framework for m in _m7_artifact_schema.frameworks}
-        assert names == {"langgraph", "crewai", "openai_agents"}
+        assert names == {"langgraph", "crewai", "claude"}
 
     def test_artifact_all_dispositions_agree(self, _m7_artifact_schema):
         assert _m7_artifact_schema.all_dispositions_agree is True
@@ -380,7 +380,7 @@ class TestComparisonArtifact:
         )
 
     def test_artifact_framework_order_matches_registry(self, _m7_artifact_schema):
-        expected_order = ["langgraph", "crewai", "openai_agents"]
+        expected_order = ["langgraph", "crewai", "claude"]
         actual_order = [m.framework for m in _m7_artifact_schema.frameworks]
         assert actual_order == expected_order, (
             f"Framework order {actual_order} != registry order {expected_order}"

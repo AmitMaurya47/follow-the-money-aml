@@ -55,6 +55,9 @@ def test_pages_render_without_exception():
     at.button[0].click().run()  # dummy login on the welcome page
     assert not at.exception and at.session_state["signed_in"]
 
+    at.sidebar.radio[0].set_value("📖 The story").run()
+    assert not at.exception
+
     at.sidebar.radio[0].set_value("👤 My accounts").run()
     assert not at.exception
     assert at.selectbox, "signed-in view should offer an account picker"
@@ -62,5 +65,7 @@ def test_pages_render_without_exception():
     at.sidebar.radio[0].set_value("₿ Crypto (Elliptic)").run()
     assert not at.exception
 
-    at.sidebar.radio[0].set_value("🛰️ System live").run()
+    at.sidebar.radio[0].set_value("🛰️ Live system & testing").run()
+    assert not at.exception
+    at.radio(key="live_mode").set_value("Evaluate · balanced sample, threshold and latency").run()
     assert not at.exception
