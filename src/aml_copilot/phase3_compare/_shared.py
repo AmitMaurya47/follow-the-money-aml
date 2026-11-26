@@ -116,6 +116,8 @@ def validate_phase3_results(
     results: list[Phase3CaseResult],
     eval_cases: list[EvalCase],
     framework_name: str,
+    *,
+    allow_usage: bool = False,
 ) -> None:
     """
     Assert all AMLAgentRunner protocol invariants and cost/token constraints.
@@ -162,17 +164,18 @@ def validate_phase3_results(
             f"{framework_name}: missing required fields in: {empty_fields}"
         )
 
-    bad_tokens = [r.case_id for r in results if r.tokens_used != 0]
-    if bad_tokens:
-        raise RuntimeError(
-            f"{framework_name}: non-zero tokens_used in: {bad_tokens}"
-        )
+    if not allow_usage:
+        bad_tokens = [r.case_id for r in results if r.tokens_used != 0]
+        if bad_tokens:
+            raise RuntimeError(
+                f"{framework_name}: non-zero tokens_used in: {bad_tokens}"
+            )
 
-    bad_cost = [r.case_id for r in results if r.cost_usd != 0.0]
-    if bad_cost:
-        raise RuntimeError(
-            f"{framework_name}: non-zero cost_usd in: {bad_cost}"
-        )
+        bad_cost = [r.case_id for r in results if r.cost_usd != 0.0]
+        if bad_cost:
+            raise RuntimeError(
+                f"{framework_name}: non-zero cost_usd in: {bad_cost}"
+            )
 
     eval_ids = {c.case_id for c in eval_cases}
     result_ids = set(case_ids)

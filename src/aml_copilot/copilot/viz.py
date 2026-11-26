@@ -5,6 +5,9 @@ import networkx as nx
 import pandas as pd
 import plotly.graph_objects as go
 
+from .agents import LOW_RISK_CUTOFF
+from .model import DECISION_THRESHOLD
+
 PALETTE = {
     "pending": "#3b4252",
     "running": "#fbbf24",
@@ -102,7 +105,8 @@ def ego_network_figure(
     hops: int = 2,
     max_nodes: int = 80,
 ) -> go.Figure:
-    """Interactive neighbourhood: node colour = risk score, edges in loops highlighted."""
+    """Interactive neighbourhood: node colour = risk score. Links take the lower of their two ends' scores:
+    red at or above the decision threshold, amber above the low-risk cutoff, orange for loops."""
     undirected = graph.to_undirected(as_view=True)
     reach = nx.single_source_shortest_path_length(undirected, center, cutoff=hops)
     if len(reach) > max_nodes:
@@ -118,23 +122,46 @@ def ego_network_figure(
         if len(comp) > 1:
             cycle_nodes |= comp
 
-    edge_x, edge_y, edge_color = [], [], []
+    # A link is only as risky as its safer end: use the lower of the two scores.
+    def link_risk(u: str, v: str) -> float:
+        return min(float(scores.get(u, 0.0)), float(scores.get(v, 0.0)))
+
+    bands = {"risky": ([], []), "watched": ([], []), "other": ([], [])}  # loops are drawn as an overlay
     for u, v in sub.edges():
         (x0, y0), (x1, y1) = pos[u], pos[v]
-        edge_x += [x0, x1, None]
-        edge_y += [y0, y1, None]
+        risk = link_risk(u, v)
+        if risk >= DECISION_THRESHOLD:
+            key = "risky"
+        elif risk >= LOW_RISK_CUTOFF:
+            key = "watched"
+        else:
+            key = "other"
+        bands[key][0].extend([x0, x1, None])
+        bands[key][1].extend([y0, y1, None])
     fig = go.Figure()
-    if edge_x:
-        cyc_x, cyc_y, plain_x, plain_y = [], [], [], []
-        for u, v in sub.edges():
+    style = {
+        "other": dict(width=1, color="#475569", name="transfers"),
+        "watched": dict(width=2.5, color="#fbbf24", name="watched link (risk 0.15–0.5)"),
+        "risky": dict(width=4, color="#f87171", name="risky link (risk ≥ 0.5 at both ends)"),
+    }
+    for key in ("other", "watched", "risky"):
+        xs_e, ys_e = bands[key]
+        if xs_e:
+            fig.add_trace(go.Scatter(x=xs_e, y=ys_e, mode="lines", line=dict(
+                width=style[key]["width"], color=style[key]["color"]),
+                hoverinfo="skip", name=style[key]["name"]))
+
+    # Loops are drawn on top of the risk colours, so a risky loop still shows as a loop.
+    loop_x, loop_y = [], []
+    for u, v in sub.edges():
+        if u in cycle_nodes and v in cycle_nodes:
             (x0, y0), (x1, y1) = pos[u], pos[v]
-            target = (cyc_x, cyc_y) if (u in cycle_nodes and v in cycle_nodes) else (plain_x, plain_y)
-            target[0].extend([x0, x1, None])
-            target[1].extend([y0, y1, None])
-        fig.add_trace(go.Scatter(x=plain_x, y=plain_y, mode="lines",
-                                 line=dict(width=1, color="#475569"), hoverinfo="skip", name="transfers"))
-        fig.add_trace(go.Scatter(x=cyc_x, y=cyc_y, mode="lines",
-                                 line=dict(width=2.5, color="#fb923c"), hoverinfo="skip", name="loop"))
+            loop_x += [x0, x1, None]
+            loop_y += [y0, y1, None]
+    if loop_x:
+        fig.add_trace(go.Scatter(x=loop_x, y=loop_y, mode="lines",
+                                 line=dict(width=3, color="#fb923c", dash="dot"),
+                                 hoverinfo="skip", name="loop (money returns to its source)"))
 
     nodes = list(sub.nodes())
     xs = [pos[n][0] for n in nodes]

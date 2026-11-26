@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import average_precision_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -60,15 +61,24 @@ def fit_model(features: pd.DataFrame, labels: pd.Series, seed: int = SEED) -> tu
         X, y, test_size=0.3, stratify=y, random_state=seed
     )
 
-    clf = HistGradientBoostingClassifier(
+    # Gradient boosting gives sharp scores that pile up near 1 for template-like illicit
+    # accounts. Platt (sigmoid) calibration maps them to probabilities with a smoother spread.
+    # No class weights: weights would push probabilities away from the real base rate.
+    base = HistGradientBoostingClassifier(
         max_iter=300,
         learning_rate=0.05,
-        class_weight="balanced",
-        early_stopping=True,
-        validation_fraction=0.1,
+        early_stopping="auto",  # on only for large samples; avoids tiny-fold splits
         random_state=seed,
     )
-    clf.fit(X_tr, y_tr)
+    # Calibration needs enough examples of each class in every fold; tiny samples skip it.
+    folds = min(5, int(y_tr.value_counts().min()))
+    if folds >= 2:
+        clf = CalibratedClassifierCV(base, method="sigmoid", cv=folds)
+        clf.fit(X_tr, y_tr)
+        calibration = f"sigmoid (Platt), cv={folds}"
+    else:
+        clf = base.fit(X_tr, y_tr)
+        calibration = "none (too few examples per class)"
 
     proba = clf.predict_proba(X_te)[:, 1]
     pred = (proba >= DECISION_THRESHOLD).astype(int)
@@ -85,9 +95,34 @@ def fit_model(features: pd.DataFrame, labels: pd.Series, seed: int = SEED) -> tu
         "recall_at_threshold": round(float(recall_score(y_te, pred, zero_division=0)), 4),
         "precision_at_top_1pct": round(float(y_te.iloc[top_k].mean()), 4),
         "decision_threshold": DECISION_THRESHOLD,
+        "calibration": calibration,
+        "illicit_share_scoring_at_0.9": round(float((proba[y_te.values == 1] >= 0.9).mean()), 3),
+        "distinct_illicit_scores": int(len(np.unique(proba[y_te.values == 1].round(4)))),
     }
 
     median = {f: float(X[f].median()) for f in FEATURES}
     q75, q25 = X.quantile(0.75), X.quantile(0.25)
     scale = {f: float(max((q75[f] - q25[f]) / 1.349, 1e-9)) for f in FEATURES}
     return ScoringModel(clf, FEATURES, median, scale), metrics
+
+
+def explain_score(model: ScoringModel, feature_row: pd.DataFrame) -> dict:
+    """Per-account explanation by one-at-a-time replacement.
+
+    For each feature, swap the account's value for the population median and measure how much
+    the score changes. A positive effect means that feature pushes the score up. Effects are not
+    exactly additive, because features interact, so treat them as "what moves this score".
+    """
+    base = model.predict_proba(feature_row)
+    drivers = []
+    for name in model.features:
+        swapped = feature_row.copy()
+        swapped[name] = model.median[name]
+        drivers.append({
+            "feature": name,
+            "value": round(float(feature_row[name].iloc[0]), 4),
+            "population_median": round(float(model.median[name]), 4),
+            "effect": round(base - model.predict_proba(swapped), 4),
+        })
+    drivers.sort(key=lambda d: -abs(d["effect"]))
+    return {"score": round(base, 4), "drivers": drivers}

@@ -24,9 +24,12 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
 ]
+ui = [
+    "streamlit>=1.40",
+]
 compare = [
     "crewai>=0.80",
-    "openai-agents>=0.18",
+    "anthropic>=0.40",
 ]
 
 [project.scripts]

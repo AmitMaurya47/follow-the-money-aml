@@ -54,7 +54,7 @@ _DEFAULTS: dict[str, Path] = {
 }
 
 # ── Runner registry — lazy loading ────────────────────────────────────────────
-# Framework runners (crewai, openai-agents) are optional [compare] dependencies.
+# Framework runners (crewai, anthropic) are optional [compare] dependencies.
 # Do NOT import them at module level — this file must be importable with only
 # [dev] installed (e.g., for --help, argparse, and import-time tests).
 # Runners are resolved via importlib only when a comparison run starts.
@@ -67,7 +67,7 @@ _RUNNER_SPECS: list[tuple[str, str, Path]] = [
     # (module_path, class_name, source_file)
     ("aml_copilot.phase3_compare.langgraph_runner",    "LangGraphRunner",    _PKG / "langgraph_runner.py"),
     ("aml_copilot.phase3_compare.crewai_runner",       "CrewAIRunner",       _PKG / "crewai_runner.py"),
-    ("aml_copilot.phase3_compare.openai_agents_runner","OpenAIAgentsRunner", _PKG / "openai_agents_runner.py"),
+    ("aml_copilot.phase3_compare.claude_runner",       "ClaudeRunner",       _PKG / "claude_runner.py"),
 ]
 
 _COMPARE_INSTALL_MSG: str = (
@@ -83,7 +83,7 @@ def _build_runner_registry() -> list[tuple[Any, Path]]:
     Raises
     ------
     ImportError
-        If any optional comparison dependency (crewai, openai-agents) is missing.
+        If any optional comparison dependency (crewai, anthropic) is missing.
         The error message names the exact install command.
     """
     import importlib
@@ -478,7 +478,7 @@ if __name__ == "__main__":
 
 # ── Backward-compatible lazy attribute ────────────────────────────────────────
 # Supports `from aml_copilot.phase3_compare.run_comparison import RUNNER_REGISTRY`
-# without requiring crewai/openai-agents at module import time (PEP 562).
+# without requiring crewai/anthropic at module import time (PEP 562).
 # Access triggers lazy loading; raises ImportError with install instructions if
 # optional comparison dependencies are not installed.
 

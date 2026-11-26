@@ -33,7 +33,7 @@ class AMLAgentRunner(Protocol):
     ----------
     framework_name : str
         Short identifier for the framework.
-        Expected values: "langgraph", "crewai", "openai_agents".
+        Expected values: "langgraph", "crewai", "claude".
 
     Methods
     -------

@@ -139,5 +139,83 @@ HOW_TO = [
     ("My bank accounts", "Sign in, then open 👤 My accounts. Pick an account to see its risk status and the agents' reasoning."),
     ("My Bitcoin transactions", "Open ₿ Bitcoin, then 👛 My transactions. Pick one to see its risk and the transactions linked to it."),
     ("Explorer", "In ₿ Bitcoin, 🔎 Explorer lets you search any labelled transaction and inspect its neighbourhood."),
-    ("System live", "🛰️ runs the whole usual process on a sample of accounts, one stage at a time."),
+    ("Live system & testing", "🛰️ runs the whole usual process as a demo, or evaluates accuracy on a balanced sample."),
 ]
+
+
+# Sidebar pages, in the order a new user should meet them. copilot_ui.py uses this list.
+PAGE_NAMES = [
+    "🌐 Welcome", "📖 The story", "👤 My accounts", "🛰️ Live system & testing", "🏠 Command center",
+    "🕸️ Network", "⚡ Live workflow", "⏯ Playback", "📚 Knowledge base",
+    "₿ Crypto (Elliptic)", "💬 Ask the assistant",
+]
+
+
+def story_chapters(bank: dict, btc: dict | None) -> list[dict]:
+    """The full story, one chapter per part of the app. Numbers come from the live metrics.
+
+    ``bank`` is the bank model metrics; ``btc`` the Bitcoin metrics, or None if not built yet.
+    """
+    roc = f"{bank['roc_auc']:.2f}"
+    prec = f"{bank['precision_at_threshold']:.0%}"
+    rec = f"{bank['recall_at_threshold']:.0%}"
+    if btc is not None:
+        btc_line = (f"On real Bitcoin transactions the same kind of logic reaches ROC-AUC {btc['roc_auc']:.2f} "
+                    f"on transactions from later time steps the model never trained on.")
+        btc_test = (f"Precision {btc['precision_at_threshold']:.0%} and recall {btc['recall_at_threshold']:.0%} "
+                    f"at threshold {btc['decision_threshold']}, measured on that later period.")
+    else:
+        btc_line = "Build the Bitcoin artifacts on the Bitcoin page to see its results here."
+        btc_test = ""
+    return [
+        {"title": "Why this exists", "page": "🌐 Welcome",
+         "text": ("Criminals hide dirty money by moving it through many small transfers, so each step looks ordinary. "
+                  "Banks and crypto exchanges handle millions of transfers, and reviewing them by hand is slow and costly. "
+                  "This lab asks one question: can we rank the accounts and transactions most worth a person's time, "
+                  "and explain every ranking so the reviewer can check it?")},
+        {"title": "Follow the money", "page": "🕸️ Network",
+         "text": ("Every transfer links two accounts. Drawn together, the links form a network. Hubs that collect from "
+                  "many senders, accounts that fan money out to many receivers, and loops that send money back to where "
+                  "it started all stand out in the picture. The Network page lets you explore any account's neighbourhood.")},
+        {"title": "Measure each account's behaviour", "page": "🏠 Command center",
+         "text": (f"Each of the {bank['n_accounts']:,} bank accounts is described by 16 numbers: how many partners it has, "
+                  "how much flows in and out, whether it sits in a loop, how quickly it forwards money. The Command center "
+                  "shows the headline numbers and how well the scores separate illicit accounts from clean ones.")},
+        {"title": "Turn behaviour into a risk score", "page": "🏠 Command center",
+         "text": (f"A gradient-boosted model turns those 16 numbers into a score between 0 and 1. On held-back accounts it "
+                  f"reaches ROC-AUC {roc}. Scores are calibrated, so they are meant to read as likelihoods. A high score is "
+                  "a reason to look closer. It is not proof of a crime.")},
+        {"title": "Explain every score", "page": "👤 My accounts",
+         "text": ("A score alone does not help a reviewer. For each account, the 'Why this score?' panel shows which features "
+                  "moved it, how far, and in plain language. The reviewer can check the reasoning instead of trusting a number.")},
+        {"title": "Agents take the next step", "page": "⚡ Live workflow",
+         "text": ("Accounts that score above the cutoff go further. A scorer, a graph investigator, a retriever, a writer and "
+                  "a decision step each do one job and pass their findings along. Low-risk accounts skip straight to the "
+                  "decision, which keeps the workload focused. The Live workflow page shows each agent as it runs.")},
+        {"title": "Replay the reasoning for audit", "page": "⏯ Playback",
+         "text": ("Each investigation can be recorded once and replayed step by step. A reviewer or auditor can see exactly "
+                  "what each agent saw and produced, in the order it happened.")},
+        {"title": "Ground the write-up in evidence", "page": "📚 Knowledge base",
+         "text": ("Typology notes cover layering, fan-in and fan-out, circular flows, money mules and reporting guidance. The "
+                  "retriever pulls the relevant passages, and the writer cites them, so every claim can be checked against "
+                  "a source.")},
+        {"title": "Test honestly", "page": "🛰️ Live system & testing",
+         "text": (f"The live page runs the whole process on a sample. The Evaluate mode uses a balanced sample, a "
+                  f"threshold you can change, and latency numbers, so you can see where the system is accurate and where "
+                  f"it misses. At threshold 0.5 the bank model reaches precision {prec} and recall {rec}.")},
+        {"title": "The same pattern in Bitcoin", "page": "₿ Crypto (Elliptic)",
+         "text": ("Bitcoin records every payment publicly, but not who owns each wallet. The Elliptic dataset adds real "
+                  "labels from investigations, so we can test the same idea on real money. " + btc_line)},
+        {"title": "Inspect your own transactions", "page": "₿ Crypto (Elliptic)",
+         "text": ("After signing in, the My transactions tab lists the Bitcoin transactions linked to your profile, with "
+                  "their risk and the neighbouring transactions they connect to. The Explorer tab lets you search any "
+                  "labelled transaction. " + btc_test)},
+        {"title": "Ask about your case", "page": "💬 Ask the assistant",
+         "text": ("Ask why an account was flagged, what you can do next, or what the data cannot tell you. Answers come from "
+                  "fixed facts, and the case note keeps the conversation consistent. The assistant will not help anyone "
+                  "avoid review. It points to legitimate steps instead.")},
+        {"title": "The human decides", "page": "👤 My accounts",
+         "text": ("The system ranks, explains and drafts. A person decides. Limits to keep in mind: the bank data is "
+                  "synthetic, the Bitcoin data is real but different in shape, the labels come from past investigations "
+                  "and may be incomplete, and a score is never proof that a crime happened.")},
+    ]

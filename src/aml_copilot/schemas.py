@@ -124,7 +124,7 @@ class Phase3CaseResult(BaseModel):
     """Per-case output produced by any Phase 3 framework runner."""
     case_id: str
     account_id: str
-    framework: str                                  # "langgraph" | "crewai" | "openai_agents"
+    framework: str                                  # "langgraph" | "crewai" | "claude"
     disposition: Literal["ESCALATE", "CLEAR"]
     decision_reason: str
     sanctions_hits: list[SanctionsHit]
@@ -167,7 +167,7 @@ class Phase3ComparisonMetrics(BaseModel):
     framework_version_information: dict[str, str] = {}
     phase1_accuracy: float                          # from artifacts/metrics_baseline.json
     phase2_accuracy: float                          # from artifacts/phase2_langgraph_metrics.json
-    frameworks: list[Phase3FrameworkMetrics]        # ordered: langgraph, crewai, openai_agents
+    frameworks: list[Phase3FrameworkMetrics]        # ordered: langgraph, crewai, claude
     all_dispositions_agree: bool
     all_reasoning_agree: bool                       # decision_reason + agent_reasoning identical
     all_human_review_flags_agree: bool

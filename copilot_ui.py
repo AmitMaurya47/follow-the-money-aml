@@ -7,12 +7,11 @@ Pages
 -----
 Welcome          what the tool is, how it works, flowchart, demo sign-in entry
 My accounts      demo sign-in; check whether linked accounts were used for laundering
-System live      the whole usual process run live, stage by stage, as a story
+Live system & testing  one page, two modes: a live demo run, or an evaluation with threshold and latency
 Command center   KPIs, score separation, pipeline overview
 Network          interactive transaction neighbourhood around any account
 Live workflow    watch the LangGraph agents run node by node
 Playback         record an investigation and replay it step by step
-Real-time test   stream a batch of investigations and score them against labels
 Knowledge base   retrieval over typology passages, with relevance chart
 """
 from __future__ import annotations
@@ -115,11 +114,7 @@ scores = score_series(bundle)
 labels = bundle.labels
 ranked_accounts = scores.sort_values(ascending=False).index.tolist()
 
-PAGE_NAMES = [
-    "🌐 Welcome", "👤 My accounts", "🛰️ System live", "🏠 Command center", "🕸️ Network",
-    "⚡ Live workflow", "⏯ Playback", "🧪 Real-time test", "📚 Knowledge base",
-    "₿ Crypto (Elliptic)", "💬 Ask the assistant",
-]
+PAGE_NAMES = landing.PAGE_NAMES
 
 
 def go_to(target: str) -> None:
@@ -163,120 +158,10 @@ with st.sidebar:
     st.caption(f"Accounts: **{len(scores):,}**  ·  Transactions: **{bundle.metrics['n_transactions']:,}**")
     st.caption(f"AI drafting: **{'available' if API_KEY_PRESENT else 'off (no key)'}**")
 
-if page.startswith("🌐"):
+def render_demo():
     st.markdown(
         landing.welcome_hero(
-            "Bank accounts · Bitcoin · one investigation lab",
-            "Follow the Money",
-            "Money that is laundered leaves a trail of many small moves. This lab reads that trail in bank "
-            "transfers and in Bitcoin, scores it, and explains each decision to a human analyst.",
-        ),
-        unsafe_allow_html=True,
-    )
-
-    if not st.session_state.get("signed_in"):
-        st.markdown("#### Sign in")
-        with st.form("login_form"):
-            username = st.text_input("Username", key="login_user")
-            password = st.text_input("Password", type="password", key="login_pass")
-            submitted = st.form_submit_button("Sign in", type="primary")
-        if submitted:
-            if check_login(username, password):
-                st.session_state["signed_in"] = True
-                st.session_state["user"] = username.strip()
-                st.rerun()
-            else:
-                st.error("Wrong username or password.")
-        st.caption(f"Dummy authentication for this prototype. Demo login: **demo** / **{'demo123'}**. "
-                   "Nothing is stored, and this is not real security.")
-    else:
-        st.success(f"Signed in as {st.session_state.get('user')}.")
-        st.button("Sign out", on_click=sign_out)
-
-    st.markdown("#### The story")
-    st.markdown(landing.flow_html(landing.BRIDGE_STEPS), unsafe_allow_html=True)
-    st.caption("The bank and Bitcoin datasets are separate and not linked to each other. The story is that the "
-               "same kind of pattern shows up in both, so one lab can study both.")
-
-    st.markdown("#### What you can check, and how")
-    for what, how in landing.HOW_TO:
-        st.markdown(f"- **{what}**: {how}")
-
-    st.markdown("#### How the bank side works")
-    st.markdown(landing.flow_html(), unsafe_allow_html=True)
-
-    a, b = st.columns(2)
-    with a:
-        st.markdown("#### What it does")
-        st.markdown(
-            "- Builds a **transaction graph** of who pays whom.\n"
-            "- Scores every account with a **risk model**.\n"
-            "- Sends risky accounts to **agents** that look at their network and retrieve typology guidance.\n"
-            "- Writes a **case narrative** that cites the guidance it used."
-        )
-    with b:
-        st.markdown("#### What it does not do")
-        st.markdown(
-            "- It does not decide that a crime happened. It ranks cases for human review.\n"
-            "- It is trained on synthetic bank data and real Bitcoin data, and is a learning project, not a compliance system.\n"
-            "- The writer uses the AI model only when a key is set; otherwise a fixed template is used."
-        )
-
-    st.markdown("#### Start here")
-    s1, s2, s3 = st.columns(3)
-    with s1:
-        st.button("👤 My bank accounts", on_click=go_to, args=("👤 My accounts",))
-    with s2:
-        st.button("👛 My Bitcoin transactions", on_click=go_to, args=("₿ Crypto (Elliptic)",))
-    with s3:
-        st.button("🛰️ Watch the system run", on_click=go_to, args=("🛰️ System live",))
-
-elif page.startswith("👤"):
-    st.markdown(
-        landing.welcome_hero(
-            "My accounts",
-            "Were any of my accounts used for laundering?",
-            "Pick an account to see its risk score, whether it needs review, and the agents' reasoning.",
-        ),
-        unsafe_allow_html=True,
-    )
-    if not st.session_state.get("signed_in"):
-        st.info("Sign in on the welcome page to see your accounts.")
-        st.button("Go to sign-in", on_click=go_to, args=("🌐 Welcome",))
-    else:
-        st.success(f"Signed in as {st.session_state.get('user')}. Accounts linked to this profile:")
-        rows = []
-        for acc in demo_accounts(labels):
-            s = scores[acc]
-            if s >= DECISION_THRESHOLD:
-                state_txt = "🚩 Flagged for review"
-            elif s >= LOW_RISK_CUTOFF:
-                state_txt = "👀 Being watched"
-            else:
-                state_txt = "✅ Normal"
-            rows.append({"account": acc, "risk score": round(float(s), 3), "status": state_txt,
-                         "known laundering activity (demo only)": "yes" if labels.get(acc, 0) else "no"})
-        st.dataframe(pd.DataFrame(rows), hide_index=True)
-        st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
-
-        chosen = st.selectbox("Open an account to see the agents' reasoning", [r["account"] for r in rows])
-        st.button("💬 Ask the assistant about this account", key="ask-acc",
-                  on_click=ask_about, args=("Bank account", "chat_acc", chosen))
-        result = investigate(bundle.as_agent_bundle(), chosen)
-        g1, g2 = st.columns([1, 2])
-        with g1:
-            st.plotly_chart(risk_gauge_figure(result["score"]), key="my-gauge")
-            badge = "badge-esc" if result["disposition"] == "ESCALATE" else "badge-clr"
-            st.markdown(f'<div style="text-align:center"><span class="{badge}">{result["disposition"]}</span></div>',
-                        unsafe_allow_html=True)
-        with g2:
-            st.plotly_chart(workflow_figure(status_for(result), {}), key="my-wf")
-            st.markdown(result.get("narrative", ""))
-
-elif page.startswith("🛰"):
-    st.markdown(
-        landing.welcome_hero(
-            "System live",
+            "Live demo",
             "The whole process, running now",
             "A sample of accounts goes through every stage. Nothing is replayed: each stage runs as you watch.",
         ),
@@ -380,6 +265,328 @@ def get_crypto():
     from aml_copilot.crypto import load_crypto_bundle
     return load_crypto_bundle()
 
+
+
+def render_run_logs(bundle):
+    """Browse the agent run logs: status per run, the event log, and resume for failed runs."""
+    from aml_copilot.copilot.agents import resume_investigation
+    from aml_copilot.copilot.runs import RunStore
+
+    store = RunStore()
+    with st.expander("🧾 Agent run logs"):
+        st.caption("Every investigation is logged to logs/agent_runs/. Narratives and keys are never logged.")
+        st.markdown("**Demo a failure.** Runs one case with an error injected into the chosen agent. "
+                    "The run stops there and is logged. Then resume it below: the agents that finished "
+                    "are not run again.")
+        d1, d2, d3 = st.columns([2, 2, 1])
+        fail_agent = d1.selectbox("Agent that fails", NODE_ORDER, index=2, key="demo-fail-agent")
+        demo_acc = demo_accounts(bundle.labels)[0]
+        d2.markdown(f"Case: `{demo_acc}` (a known laundering account from the demo set)")
+        if d3.button("Run with failure", key="demo-fail-btn"):
+            try:
+                for _node, _update in stream_investigation(bundle.as_agent_bundle(), demo_acc,
+                                                           store=store, fail_at=fail_agent):
+                    pass
+                st.session_state["demo-flash"] = ("success", "The run finished without a failure.")
+            except RuntimeError as exc:
+                st.session_state["demo-flash"] = ("error", f"Run stopped: {exc}. Resume it below.")
+            # Select the run just created, so the panel shows it rather than a previous choice.
+            st.session_state["log-run"] = store.list_runs()[0]
+            st.rerun()
+        flash = st.session_state.pop("demo-flash", None)
+        if flash:
+            getattr(st, flash[0])(flash[1])
+        run_ids = store.list_runs()
+        if not run_ids:
+            st.info("No runs logged yet. Run the demo or an evaluation above.")
+            return
+        rows = []
+        for rid in run_ids:
+            rec = store.load(rid)
+            rows.append({"run": rid, "status": rec.status, "account": rec.account_id,
+                         "failed at": rec.failed_node or "", "last finished": rec.last_node or ""})
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+
+        chosen = st.selectbox("Inspect a run", run_ids, key="log-run")
+        rec = store.load(chosen)
+        if rec.status == "failed":
+            st.error(f"Stopped in {rec.failed_node}: {rec.error}")
+            if st.button("Resume from the next agent", key="log-resume"):
+                with st.spinner("Resuming…"):
+                    final = {}
+                    for node, update in resume_investigation(bundle.as_agent_bundle(), chosen, store=store):
+                        if node == DONE_KEY:
+                            final = update
+                if final:
+                    st.session_state["demo-flash"] = (
+                        "success", f"Resumed and finished: {final['disposition']} · score {final['score']:.3f}")
+                    st.rerun()
+        elif rec.status == "interrupted":
+            st.warning("This run stopped without an end marker (the process was probably killed). "
+                       "It can be resumed from the command line with scripts/agent_runs.py resume.")
+
+        events = store.events(chosen)
+        st.dataframe(pd.DataFrame([
+            {"time": e["ts"], "event": e["event"],
+             "agent": e.get("node", ""), "detail": ", ".join(
+                 f"{k}={v}" for k, v in e.items() if k not in ("ts", "run_id", "event", "node"))}
+            for e in events
+        ]), hide_index=True, key=f"log-events-{chosen}")
+        with st.expander("Raw log file"):
+            st.code(store._log_path(chosen).read_text(encoding="utf-8"), language="json")
+
+
+def render_evaluate():
+    hero("Evaluate the model", "Stream investigations over a balanced sample and watch the confusion matrix and latency update live.",
+         ["batch streaming", "live metrics", "ground-truth check"])
+    c1, c2, c3 = st.columns(3)
+    n_total = c1.slider("Accounts to test", 10, 300, 80, step=10)
+    seed = c2.number_input("Sample seed", value=7, step=1)
+    threshold = c3.slider("Escalate threshold", 0.05, 0.95, float(DECISION_THRESHOLD), 0.05,
+                          help="Overrides the decision threshold for this test run only")
+    run = st.button("▶ Start streaming test", type="primary")
+
+    kpi = st.empty()
+    cols = st.columns([1, 1])
+    matrix_slot = cols[0].empty()
+    latency_slot = cols[1].empty()
+    feed_slot = st.empty()
+
+    if run:
+        illicit = labels[labels == 1].index.to_series().sample(
+            min(n_total // 2, int((labels == 1).sum())), random_state=int(seed)).tolist()
+        clean_pool = labels[labels == 0].index.to_series()
+        clean = clean_pool.sample(n_total - len(illicit), random_state=int(seed)).tolist()
+        sample = pd.Series(illicit + clean).sample(frac=1, random_state=int(seed)).tolist()
+
+        app = build_app(bundle.as_agent_bundle(), llm=None)
+        tp = fp = tn = fn = 0
+        latencies, rows = [], []
+        for i, account in enumerate(sample, start=1):
+            t0 = time.perf_counter()
+            out = app.invoke({"account_id": account, "trace": []})
+            latencies.append((time.perf_counter() - t0) * 1000)
+            score = out["score"]
+            predicted = score >= threshold
+            actual = bool(labels.get(account, 0))
+            if predicted and actual:
+                tp += 1
+            elif predicted and not actual:
+                fp += 1
+            elif not predicted and actual:
+                fn += 1
+            else:
+                tn += 1
+            rows.append({
+                "#": i, "account": account, "score": round(score, 3),
+                "decision": "ESCALATE" if predicted else "CLEAR",
+                "truth": "illicit" if actual else "clean",
+                "correct": "✅" if predicted == actual else "❌",
+                "writer": out.get("writer_mode", "none"),
+                "ms": round(latencies[-1], 1),
+            })
+            prec = tp / (tp + fp) if tp + fp else 0.0
+            rec = tp / (tp + fn) if tp + fn else 0.0
+            acc = (tp + tn) / i
+            with kpi.container():
+                k = st.columns(5)
+                k[0].metric("Processed", f"{i}/{len(sample)}")
+                k[1].metric("Accuracy", f"{acc:.1%}")
+                k[2].metric("Precision", f"{prec:.1%}")
+                k[3].metric("Recall", f"{rec:.1%}")
+                k[4].metric("p50 latency", f"{sorted(latencies)[len(latencies)//2]:.1f} ms")
+            if i % 3 == 0 or i == len(sample):
+                matrix_slot.plotly_chart(confusion_figure(tp, fp, tn, fn), key=f"cm-{i}")
+                latency_slot.plotly_chart(
+                    go.Figure(go.Scatter(y=latencies, mode="lines+markers",
+                                         line=dict(color="#60a5fa"))).update_layout(
+                        height=280, title="Latency per investigation (ms)",
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"),
+                    key=f"lat-{i}")
+                feed_slot.dataframe(pd.DataFrame(rows[::-1][:15]), hide_index=True)
+        st.success(f"Done. {len(sample)} investigations, threshold {threshold:.2f}. Writer: template (no API calls).")
+
+
+if page.startswith("🌐"):
+    st.markdown(
+        landing.welcome_hero(
+            "Bank accounts · Bitcoin · one investigation lab",
+            "Follow the Money",
+            "Money that is laundered leaves a trail of many small moves. This lab reads that trail in bank "
+            "transfers and in Bitcoin, scores it, and explains each decision to a human analyst.",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if not st.session_state.get("signed_in"):
+        st.markdown("#### Sign in")
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input("Password", type="password", key="login_pass")
+            submitted = st.form_submit_button("Sign in", type="primary")
+        if submitted:
+            if check_login(username, password):
+                st.session_state["signed_in"] = True
+                st.session_state["user"] = username.strip()
+                st.rerun()
+            else:
+                st.error("Wrong username or password.")
+        st.caption(f"Dummy authentication for this prototype. Demo login: **demo** / **{'demo123'}**. "
+                   "Nothing is stored, and this is not real security.")
+    else:
+        st.success(f"Signed in as {st.session_state.get('user')}.")
+        st.button("Sign out", on_click=sign_out)
+
+    st.markdown("#### The story")
+    st.markdown(landing.flow_html(landing.BRIDGE_STEPS), unsafe_allow_html=True)
+    st.caption("The bank and Bitcoin datasets are separate and not linked to each other. The story is that the "
+               "same kind of pattern shows up in both, so one lab can study both.")
+
+    st.markdown("#### What you can check, and how")
+    for what, how in landing.HOW_TO:
+        st.markdown(f"- **{what}**: {how}")
+
+    st.markdown("#### How the bank side works")
+    st.markdown(landing.flow_html(), unsafe_allow_html=True)
+
+    a, b = st.columns(2)
+    with a:
+        st.markdown("#### What it does")
+        st.markdown(
+            "- Builds a **transaction graph** of who pays whom.\n"
+            "- Scores every account with a **risk model**.\n"
+            "- Sends risky accounts to **agents** that look at their network and retrieve typology guidance.\n"
+            "- Writes a **case narrative** that cites the guidance it used."
+        )
+    with b:
+        st.markdown("#### What it does not do")
+        st.markdown(
+            "- It does not decide that a crime happened. It ranks cases for human review.\n"
+            "- It is trained on synthetic bank data and real Bitcoin data, and is a learning project, not a compliance system.\n"
+            "- The writer uses the AI model only when a key is set; otherwise a fixed template is used."
+        )
+
+    st.markdown("#### Start here")
+    s0, s1, s2, s3 = st.columns(4)
+    with s0:
+        st.button("📖 Read the story", on_click=go_to, args=("📖 The story",))
+    with s1:
+        st.button("👤 My bank accounts", on_click=go_to, args=("👤 My accounts",))
+    with s2:
+        st.button("👛 My Bitcoin transactions", on_click=go_to, args=("₿ Crypto (Elliptic)",))
+    with s3:
+        st.button("🛰️ Watch the system run", on_click=go_to, args=("🛰️ Live system & testing",))
+
+elif page.startswith("📖"):
+    from aml_copilot.crypto import artifacts_ready as _crypto_ready
+
+    st.markdown(
+        landing.welcome_hero(
+            "Read this first",
+            "The story of Follow the Money",
+            "Why this lab exists, and how every part of it connects. Each chapter links to the page it describes.",
+        ),
+        unsafe_allow_html=True,
+    )
+    btc_metrics = get_crypto().metrics if _crypto_ready() else None
+    for i, ch in enumerate(landing.story_chapters(bundle.metrics, btc_metrics), start=1):
+        st.markdown(f"<div class='story-card'><b>{i}. {ch['title']}</b><br><span>{ch['text']}</span></div>",
+                    unsafe_allow_html=True)
+        st.button(f"Open: {ch['page']}", key=f"story-{i}", on_click=go_to, args=(ch["page"],))
+
+elif page.startswith("👤"):
+    st.markdown(
+        landing.welcome_hero(
+            "My accounts",
+            "Were any of my accounts used for laundering?",
+            "Pick an account to see its risk score, whether it needs review, and the agents' reasoning.",
+        ),
+        unsafe_allow_html=True,
+    )
+    if not st.session_state.get("signed_in"):
+        st.info("Sign in on the welcome page to see your accounts.")
+        st.button("Go to sign-in", on_click=go_to, args=("🌐 Welcome",))
+    else:
+        st.success(f"Signed in as {st.session_state.get('user')}. Accounts linked to this profile:")
+        rows = []
+        for acc in demo_accounts(labels):
+            s = scores[acc]
+            if s >= DECISION_THRESHOLD:
+                state_txt = "🚩 Flagged for review"
+            elif s >= LOW_RISK_CUTOFF:
+                state_txt = "👀 Being watched"
+            else:
+                state_txt = "✅ Normal"
+            rows.append({"account": acc, "risk score": round(float(s), 3), "status": state_txt,
+                         "known laundering activity (demo only)": "yes" if labels.get(acc, 0) else "no"})
+        st.dataframe(pd.DataFrame(rows), hide_index=True)
+        st.caption("The last column comes from the dataset labels. A real customer view would not show it.")
+
+        chosen = st.selectbox("Open an account to see the agents' reasoning", [r["account"] for r in rows])
+        st.button("💬 Ask the assistant about this account", key="ask-acc",
+                  on_click=ask_about, args=("Bank account", "chat_acc", chosen))
+        result = investigate(bundle.as_agent_bundle(), chosen)
+        g1, g2 = st.columns([1, 2])
+        with g1:
+            st.plotly_chart(risk_gauge_figure(result["score"]), key="my-gauge")
+            badge = "badge-esc" if result["disposition"] == "ESCALATE" else "badge-clr"
+            st.markdown(f'<div style="text-align:center"><span class="{badge}">{result["disposition"]}</span></div>',
+                        unsafe_allow_html=True)
+        with g2:
+            st.plotly_chart(workflow_figure(status_for(result), {}), key="my-wf")
+            st.markdown(result.get("narrative", ""))
+        with st.expander("Network around this account", expanded=True):
+            hops = st.slider("Hops from this account", 1, 3, 2, key="my-hops")
+            st.plotly_chart(ego_network_figure(bundle.graph, scores, labels, chosen, hops=hops, max_nodes=80),
+                            key="my-ego")
+            out_rows = [{"counterparty": v, "transactions": d["n_txn"], "total": round(d["total"], 2)}
+                        for _, v, d in bundle.graph.out_edges(chosen, data=True)]
+            in_rows = [{"counterparty": u, "transactions": d["n_txn"], "total": round(d["total"], 2)}
+                       for u, _, d in bundle.graph.in_edges(chosen, data=True)]
+            cols = ["counterparty", "transactions", "total"]
+            t1, t2 = st.columns(2)
+            t1.markdown("**Sent to (outbound)**")
+            t1.dataframe(pd.DataFrame(out_rows, columns=cols).sort_values("total", ascending=False),
+                         hide_index=True)
+            t2.markdown("**Received from (inbound)**")
+            t2.dataframe(pd.DataFrame(in_rows, columns=cols).sort_values("total", ascending=False),
+                         hide_index=True)
+            st.caption("Node colour is the account's risk score. Loops are highlighted in orange.")
+
+        from aml_copilot.assistant import FEATURE_PLAIN
+        from aml_copilot.copilot.model import explain_score
+
+        with st.expander("Why this score? What moves it for this account", expanded=True):
+            exp = explain_score(bundle.model, bundle.features.loc[[chosen]])
+            top = exp["drivers"][:8]
+            st.caption(
+                f"Score {exp['score']:.3f}. Each bar shows how much the score would change if that one feature "
+                "were set to the typical account's value. Red pushes the score up, green pulls it down. "
+                "Effects overlap, so they are a guide, not an exact breakdown."
+            )
+            fig = go.Figure(go.Bar(
+                x=[d["effect"] for d in top][::-1], y=[d["feature"] for d in top][::-1], orientation="h",
+                marker_color=["#f87171" if d["effect"] > 0 else "#34d399" for d in top][::-1],
+            ))
+            fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="effect on score",
+                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(fig, key="my-explain")
+            st.dataframe(pd.DataFrame([
+                {"feature": d["feature"], "what it means": FEATURE_PLAIN.get(d["feature"], ""),
+                 "this account": d["value"], "typical account": d["population_median"], "effect": d["effect"]}
+                for d in top
+            ]), hide_index=True)
+
+elif page.startswith("🛰"):
+    mode = st.radio("Mode", ["Demo run · story at the natural rate",
+                             "Evaluate · balanced sample, threshold and latency"],
+                    horizontal=True, key="live_mode")
+    if mode.startswith("Demo"):
+        render_demo()
+    else:
+        render_evaluate()
+    render_run_logs(bundle)
 
 if page.startswith("₿"):
     from aml_copilot.crypto import artifacts_ready, build_crypto_artifacts, neighbourhood
@@ -799,77 +1006,6 @@ elif page.startswith("⏯"):
         if step == n and final:
             st.success(f"Finished: {final['disposition']} · score {final['score']:.3f} · "
                        f"writer {final.get('writer_mode', 'n/a')}")
-
-elif page.startswith("🧪"):
-    hero("Real-time testing", "Stream investigations over a stratified sample and watch the confusion matrix and latency update live.",
-         ["batch streaming", "live metrics", "ground-truth check"])
-    c1, c2, c3 = st.columns(3)
-    n_total = c1.slider("Accounts to test", 10, 300, 80, step=10)
-    seed = c2.number_input("Sample seed", value=7, step=1)
-    threshold = c3.slider("Escalate threshold", 0.05, 0.95, float(DECISION_THRESHOLD), 0.05,
-                          help="Overrides the decision threshold for this test run only")
-    run = st.button("▶ Start streaming test", type="primary")
-
-    kpi = st.empty()
-    cols = st.columns([1, 1])
-    matrix_slot = cols[0].empty()
-    latency_slot = cols[1].empty()
-    feed_slot = st.empty()
-
-    if run:
-        illicit = labels[labels == 1].index.to_series().sample(
-            min(n_total // 2, int((labels == 1).sum())), random_state=int(seed)).tolist()
-        clean_pool = labels[labels == 0].index.to_series()
-        clean = clean_pool.sample(n_total - len(illicit), random_state=int(seed)).tolist()
-        sample = pd.Series(illicit + clean).sample(frac=1, random_state=int(seed)).tolist()
-
-        app = build_app(bundle.as_agent_bundle(), llm=None)
-        tp = fp = tn = fn = 0
-        latencies, rows = [], []
-        for i, account in enumerate(sample, start=1):
-            t0 = time.perf_counter()
-            out = app.invoke({"account_id": account, "trace": []})
-            latencies.append((time.perf_counter() - t0) * 1000)
-            score = out["score"]
-            predicted = score >= threshold
-            actual = bool(labels.get(account, 0))
-            if predicted and actual:
-                tp += 1
-            elif predicted and not actual:
-                fp += 1
-            elif not predicted and actual:
-                fn += 1
-            else:
-                tn += 1
-            rows.append({
-                "#": i, "account": account, "score": round(score, 3),
-                "decision": "ESCALATE" if predicted else "CLEAR",
-                "truth": "illicit" if actual else "clean",
-                "correct": "✅" if predicted == actual else "❌",
-                "writer": out.get("writer_mode", "none"),
-                "ms": round(latencies[-1], 1),
-            })
-            prec = tp / (tp + fp) if tp + fp else 0.0
-            rec = tp / (tp + fn) if tp + fn else 0.0
-            acc = (tp + tn) / i
-            with kpi.container():
-                k = st.columns(5)
-                k[0].metric("Processed", f"{i}/{len(sample)}")
-                k[1].metric("Accuracy", f"{acc:.1%}")
-                k[2].metric("Precision", f"{prec:.1%}")
-                k[3].metric("Recall", f"{rec:.1%}")
-                k[4].metric("p50 latency", f"{sorted(latencies)[len(latencies)//2]:.1f} ms")
-            if i % 3 == 0 or i == len(sample):
-                matrix_slot.plotly_chart(confusion_figure(tp, fp, tn, fn), key=f"cm-{i}")
-                latency_slot.plotly_chart(
-                    go.Figure(go.Scatter(y=latencies, mode="lines+markers",
-                                         line=dict(color="#60a5fa"))).update_layout(
-                        height=280, title="Latency per investigation (ms)",
-                        margin=dict(l=10, r=10, t=40, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"),
-                    key=f"lat-{i}")
-                feed_slot.dataframe(pd.DataFrame(rows[::-1][:15]), hide_index=True)
-        st.success(f"Done. {len(sample)} investigations, threshold {threshold:.2f}. Writer: template (no API calls).")
 
 elif page.startswith("📚"):
     hero("Typology knowledge base", "The passages the retriever agent draws on, ranked by relevance to your query.",

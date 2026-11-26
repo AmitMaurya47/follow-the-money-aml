@@ -46,7 +46,7 @@ jobs:
         run: |
           python -c "
           import importlib.metadata, sys
-          for pkg in ('langgraph', 'crewai', 'openai-agents', 'pydantic'):
+          for pkg in ('langgraph', 'crewai', 'anthropic', 'pydantic'):
               try:
                   v = importlib.metadata.version(pkg)
               except importlib.metadata.PackageNotFoundError:

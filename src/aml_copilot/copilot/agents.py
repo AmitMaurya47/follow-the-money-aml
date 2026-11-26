@@ -17,17 +17,35 @@ Specialist agents share one case state:
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, TypedDict
+import re
+from typing import Annotated, Any, Callable, TypedDict
 
 import networkx as nx
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .model import DECISION_THRESHOLD, ScoringModel
 from .rag import KnowledgeBase
 from .rag_graph import GraphRetriever, signals_from_case
+from .runs import RunStore, elapsed_ms, timer
 
 LOW_RISK_CUTOFF = 0.15  # below this the case is cleared without investigation
 WRITER_MODEL = "claude-haiku-5-5"
+
+# Responsible-AI guard: a drafted narrative must not assert guilt or give evasion advice.
+# If it does, the fixed template is used instead and the replacement is recorded in the trace.
+GUARD_PATTERNS = [
+    r"\bis (?:guilty|a criminal|a money launderer)\b",
+    r"\bcommitted (?:fraud|a crime|money laundering)\b",
+    r"\bconfirmed (?:money laundering|fraud|a crime)\b",
+    r"\b(?:money laundering|crime|fraud) (?:occurred|took place|was committed)\b",
+    r"\b(?:evade|avoid|get around) (?:detection|review|the (?:bank|system|flag))\b",
+    r"\bshould be (?:arrested|charged|reported to police)\b",
+]
+REVIEW_NOTE = (
+    "Advisory output from an automated model. A human analyst makes the final decision. "
+    "No account is blocked or reported automatically."
+)
 
 FLAG_QUERIES = {
     "out_partners": "fan-out dispersal many distinct counterparties smurfing",
@@ -55,7 +73,9 @@ class CaseState(TypedDict, total=False):
     retrieval_mode: str
     narrative: str
     writer_mode: str
+    guard: str  # "passed" | "replaced" | absent (no LLM draft)
     disposition: str
+    review_note: str
     trace: Annotated[list[str], operator.add]
 
 
@@ -146,8 +166,21 @@ def _llm_narrative(llm: Any, state: CaseState) -> str:
     return "".join(block.text for block in response.content if getattr(block, "type", "") == "text").strip()
 
 
-def build_app(bundle: AgentBundle, llm: Any | None = None):
-    """Compile the workflow. Pass an Anthropic client as ``llm`` to enable Claude drafting."""
+def guard_narrative(text: str) -> str | None:
+    """Return the first matched unsafe pattern, or None if the narrative passes."""
+    lowered = text.lower()
+    for pattern in GUARD_PATTERNS:
+        if re.search(pattern, lowered):
+            return pattern
+    return None
+
+
+def build_app(bundle: AgentBundle, llm: Any | None = None,
+              wrap: Callable[[str, Callable], Callable] | None = None):
+    """Compile the workflow. Pass an Anthropic client as ``llm`` to enable Claude drafting.
+
+    ``wrap(name, fn)`` lets the caller instrument each agent (used for run logging).
+    """
     model, features, graph, kb = bundle["model"], bundle["features"], bundle["graph"], bundle["kb"]
     graph_rag = bundle.get("graph_rag")
 
@@ -210,17 +243,27 @@ def build_app(bundle: AgentBundle, llm: Any | None = None):
     def writer(state: CaseState) -> dict:
         if llm is not None:
             try:
-                return {
-                    "narrative": _llm_narrative(llm, state),
-                    "writer_mode": "llm",
-                    "trace": [f"writer: llm ({WRITER_MODEL})"],
-                }
+                draft = _llm_narrative(llm, state)
             except Exception as exc:  # noqa: BLE001 - fall back rather than fail the case
                 return {
                     "narrative": _template_narrative(state),
                     "writer_mode": "template",
                     "trace": [f"writer: llm failed ({type(exc).__name__}), used template"],
                 }
+            blocked = guard_narrative(draft)
+            if blocked is not None:
+                return {
+                    "narrative": _template_narrative(state),
+                    "writer_mode": "template",
+                    "guard": "replaced",
+                    "trace": ["writer: guard replaced the llm draft with the template"],
+                }
+            return {
+                "narrative": draft,
+                "writer_mode": "llm",
+                "guard": "passed",
+                "trace": [f"writer: llm ({WRITER_MODEL})"],
+            }
         return {
             "narrative": _template_narrative(state),
             "writer_mode": "template",
@@ -230,7 +273,11 @@ def build_app(bundle: AgentBundle, llm: Any | None = None):
     def decide(state: CaseState) -> dict:
         score = state["score"]
         disposition = "ESCALATE" if score >= DECISION_THRESHOLD else "CLEAR"
-        update: dict[str, Any] = {"disposition": disposition, "trace": [f"decide: {disposition}"]}
+        update: dict[str, Any] = {
+            "disposition": disposition,
+            "review_note": REVIEW_NOTE,
+            "trace": [f"decide: {disposition}"],
+        }
         if "narrative" not in state:
             update["narrative"] = (
                 f"Model risk score {score:.2f} is below the investigation cutoff "
@@ -239,12 +286,16 @@ def build_app(bundle: AgentBundle, llm: Any | None = None):
             update["writer_mode"] = "none"
         return update
 
+    agents = {
+        "scorer": scorer,
+        "graph_investigator": graph_investigator,
+        "retriever": retriever,
+        "writer": writer,
+        "decide": decide,
+    }
     g = StateGraph(CaseState)
-    g.add_node("scorer", scorer)
-    g.add_node("graph_investigator", graph_investigator)
-    g.add_node("retriever", retriever)
-    g.add_node("writer", writer)
-    g.add_node("decide", decide)
+    for name, fn in agents.items():
+        g.add_node(name, wrap(name, fn) if wrap is not None else fn)
     g.add_edge(START, "scorer")
     g.add_conditional_edges(
         "scorer", route_after_score, {"investigate": "graph_investigator", "clear": "decide"}
@@ -253,32 +304,118 @@ def build_app(bundle: AgentBundle, llm: Any | None = None):
     g.add_edge("retriever", "writer")
     g.add_edge("writer", "decide")
     g.add_edge("decide", END)
-    return g.compile()
+    return g.compile(checkpointer=MemorySaver())
 
 
 def investigate(bundle: AgentBundle, account_id: str, llm: Any | None = None) -> dict[str, Any]:
-    app = build_app(bundle, llm=llm)
-    final = app.invoke({"account_id": account_id, "trace": []})
-    return dict(final)
+    final: dict[str, Any] = {}
+    for node, update in _execute(bundle, account_id, llm, RunStore(), None, None, None):
+        if node == DONE_KEY:
+            final = update
+    return final
 
 
 NODE_ORDER = ["scorer", "graph_investigator", "retriever", "writer", "decide"]
 DONE_KEY = "__done__"
 
 
-def stream_investigation(bundle: AgentBundle, account_id: str, llm: Any | None = None):
+def _logged(store: RunStore, run_id: str, fail_at: str | None = None) -> Callable[[str, Callable], Callable]:
+    """Wrap each agent so its start, end, duration and any error are written to the run log.
+
+    ``fail_at`` injects a deliberate error into that agent (demo of crash recovery).
+    """
+    def wrap(name: str, fn: Callable) -> Callable:
+        def instrumented(state: dict) -> dict:
+            store.log(run_id, "node_start", node=name)
+            start = timer()
+            try:
+                if name == fail_at:
+                    raise RuntimeError(f"injected failure in {name} (demo)")
+                update = fn(state)
+            except Exception as exc:
+                store.log(run_id, "node_error", node=name, error_type=type(exc).__name__,
+                          error=str(exc)[:300])
+                raise
+            store.log(run_id, "node_end", node=name, ms=elapsed_ms(start), keys=sorted(update))
+            return update
+        return instrumented
+    return wrap
+
+
+def _execute(bundle: AgentBundle, account_id: str, llm: Any | None, store: RunStore,
+             run_id: str | None, resume_node: str | None, resume_state: dict | None,
+             fail_at: str | None = None):
+    """Run the graph, logging every step and checkpointing after each finished agent.
+
+    With ``resume_node`` set, the stored state after that agent is restored and the graph
+    continues from its successors, so finished agents are not run again.
+    """
+    run_id = run_id or store.new_run()
+    app = build_app(bundle, llm=llm, wrap=_logged(store, run_id, fail_at))
+    config = {"configurable": {"thread_id": run_id}}
+    final: dict[str, Any] = dict(resume_state or {"account_id": account_id, "trace": []})
+
+    if resume_node is None:
+        store.log(run_id, "run_started", account_id=account_id, llm=llm is not None,
+                  decision_threshold=DECISION_THRESHOLD, writer_model=WRITER_MODEL if llm else None)
+        graph_input: Any = {"account_id": account_id, "trace": []}
+    else:
+        store.log(run_id, "run_resumed", after_node=resume_node, account_id=account_id)
+        app.update_state(config, resume_state, as_node=resume_node)
+        graph_input = None
+
+    try:
+        for event in app.stream(graph_input, config, stream_mode="updates"):
+            for node, update in event.items():
+                for key, value in update.items():
+                    if key == "trace":
+                        final["trace"] = final.get("trace", []) + list(value)
+                    else:
+                        final[key] = value
+                store.checkpoint(run_id, node, _json_safe(final))
+                yield node, update
+    except Exception as exc:
+        store.log(run_id, "run_failed", error_type=type(exc).__name__, error=str(exc)[:300])
+        raise
+    store.log(run_id, "run_completed", disposition=final.get("disposition"),
+              writer_mode=final.get("writer_mode", "none"), guard=final.get("guard"),
+              score=round(float(final["score"]), 4), advisory_only=True, human_review_required=True)
+    # Normalised the same way as checkpoints, so a resumed run and a fresh run return equal values.
+    yield DONE_KEY, _json_safe({**final, "run_id": run_id})
+
+
+def _json_safe(state: dict) -> dict:
+    """State as plain JSON types (tuples become lists) so checkpoints can be written to disk."""
+    import json
+
+    return json.loads(json.dumps(state, default=str))
+
+
+def stream_investigation(bundle: AgentBundle, account_id: str, llm: Any | None = None,
+                         store: RunStore | None = None, fail_at: str | None = None):
     """Yield ``(node, update)`` as each agent finishes, then ``(DONE_KEY, final_state)``.
 
     Lets a UI show the workflow progressing in real time instead of waiting for the end.
+    Every run is logged; ``final_state["run_id"]`` identifies it for later resume.
     """
-    app = build_app(bundle, llm=llm)
-    final: dict[str, Any] = {"account_id": account_id, "trace": []}
-    for event in app.stream({"account_id": account_id, "trace": []}, stream_mode="updates"):
-        for node, update in event.items():
-            for key, value in update.items():
-                if key == "trace":
-                    final["trace"] = final.get("trace", []) + list(value)
-                else:
-                    final[key] = value
-            yield node, update
-    yield DONE_KEY, final
+    yield from _execute(bundle, account_id, llm, store or RunStore(), None, None, None, fail_at)
+
+
+def resume_investigation(bundle: AgentBundle, run_id: str, llm: Any | None = None,
+                         store: RunStore | None = None):
+    """Continue a run that crashed, starting from the agent after the last finished one.
+
+    If the crash happened in the first agent (no checkpoint yet), the run restarts from the
+    beginning under the same run id. Completed runs raise ValueError.
+    """
+    store = store or RunStore()
+    record = store.load(run_id)
+    if record.status == "completed":
+        raise ValueError(f"run {run_id} already completed; nothing to resume")
+    if record.account_id is None:
+        raise ValueError(f"run {run_id} has no account in its log")
+    if record.checkpoint is None:
+        yield from _execute(bundle, record.account_id, llm, store, run_id, None, None)
+        return
+    yield from _execute(bundle, record.account_id, llm, store, run_id,
+                        record.last_node, record.checkpoint)

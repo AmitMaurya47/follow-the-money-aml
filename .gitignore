@@ -43,3 +43,6 @@ build/
 
 # ── Scratch / throwaway test files ────────────────────────────────────────────
 tests/zzz_test_tmp.py
+
+# ── Agent run logs (local, may contain account ids) ───────────────────────────
+logs/

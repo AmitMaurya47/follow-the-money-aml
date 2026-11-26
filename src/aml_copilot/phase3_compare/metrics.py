@@ -340,8 +340,8 @@ def compute_comparison_metrics(
         and agreement["all_overrides_agree"]
         and agreement["case_ids_agree"]
         and agreement["case_ordering_agree"]
-        and agreement["all_costs_zero"]
-        and agreement["all_tokens_zero"]
+        # all_costs_zero / all_tokens_zero are reported but do not gate the verdict:
+        # live adapters (e.g. Claude) legitimately report token usage.
     )
 
     return Phase3ComparisonMetrics(
@@ -372,7 +372,7 @@ def get_framework_versions() -> dict[str, str]:
         "python": None,          # special case handled below
         "langgraph": "langgraph",
         "crewai": "crewai",
-        "openai_agents": "openai-agents",
+        "claude": "anthropic",
     }
     versions: dict[str, str] = {
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",

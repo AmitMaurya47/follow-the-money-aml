@@ -56,10 +56,15 @@ def run_mini_crewai(
     return CrewAIRunner(verbose=verbose).run(eval_path, baseline_path)
 
 
-def run_mini_openai_agents(
+def run_mini_claude(
     eval_path: Path = MINI_EVAL_PATH,
     baseline_path: Path = MINI_BASELINE_PATH,
+    *,
+    client=None,
 ) -> list[Phase3CaseResult]:
-    """Run OpenAI Agents pipeline against a mini fixture set."""
-    from aml_copilot.phase3_compare.openai_agents_runner import OpenAIAgentsRunner
-    return OpenAIAgentsRunner().run(eval_path, baseline_path)
+    """Run the Claude (claude-haiku-5-5) pipeline against a mini fixture set.
+
+    Requires ANTHROPIC_API_KEY; makes live API calls.
+    """
+    from aml_copilot.phase3_compare.claude_runner import ClaudeRunner
+    return ClaudeRunner(client=client).run(eval_path, baseline_path)
